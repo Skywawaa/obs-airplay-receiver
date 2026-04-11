@@ -20,6 +20,7 @@
 #include "airplay-server.h"
 #include "airplay-mirror.h"
 #include "airplay-plist.h"
+#include "bplist.h"
 #include "fairplay.h"
 #include "../log.h"
 #include "../network/http-server.h"
@@ -48,52 +49,43 @@ struct airplay_server {
 static void build_info_response(struct airplay_server *srv,
 				struct http_response *resp)
 {
-	struct plist_builder *pb = plist_builder_create();
-	if (!pb)
+	struct bplist_writer *bp = bplist_writer_create();
+	if (!bp)
 		return;
 
-	plist_dict_begin(pb);
+	bplist_begin_dict(bp, 14);
 
-	/* Device identification */
-	plist_dict_add_string(pb, "deviceid", srv->device_id_str);
-	plist_dict_add_string(pb, "model", "AppleTV5,3");
-	plist_dict_add_string(pb, "name", srv->config.name);
-	plist_dict_add_string(pb, "srcvers", "366.0");
-	plist_dict_add_string(pb, "vv", "2");
+	bplist_dict_add_string(bp, "deviceid", srv->device_id_str);
+	bplist_dict_add_string(bp, "model", "AppleTV5,3");
+	bplist_dict_add_string(bp, "name", srv->config.name);
+	bplist_dict_add_string(bp, "srcvers", "366.0");
+	bplist_dict_add_string(bp, "vv", "2");
 
-	/* Features bitmask - enable screen mirroring */
-	/* Bit 7: video, Bit 9: screen mirroring, Bit 14: audio */
-	plist_dict_add_int(pb, "features", 0x527FFFF7);
-	plist_dict_add_int(pb, "statusFlags", 0x44);
+	/* Features bitmask - enable screen mirroring + audio */
+	bplist_dict_add_int(bp, "features", 0x527FFFF7);
+	bplist_dict_add_int(bp, "statusFlags", 0x44);
 
-	/* Screen size */
-	plist_dict_add_int(pb, "width", 1920);
-	plist_dict_add_int(pb, "height", 1080);
+	bplist_dict_add_int(bp, "width", 1920);
+	bplist_dict_add_int(bp, "height", 1080);
 
-	/* Protocol info */
-	plist_dict_add_string(pb, "pi", "b08f5a79-db29-4571-b11a-e3e1e03f1e89");
-	plist_dict_add_string(pb, "pk",
+	bplist_dict_add_string(bp, "pi",
+			       "b08f5a79-db29-4571-b11a-e3e1e03f1e89");
+	bplist_dict_add_string(bp, "pk",
 		"99FD4299889422515FBD27949E4E1E21B2AF50A454499E3D4BE75A4E0F55FE63");
 
-	/* OS info */
-	plist_dict_add_string(pb, "osBuildVersion", "17K499");
-	plist_dict_add_string(pb, "protovers", "1.1");
+	bplist_dict_add_string(bp, "osBuildVersion", "17K499");
+	bplist_dict_add_string(bp, "protovers", "1.1");
+	bplist_dict_add_int(bp, "keepAliveLowPower", 1);
 
-	/* Required for modern AirPlay */
-	plist_dict_add_int(pb, "keepAliveLowPower", 1);
-	plist_dict_add_int(pb, "keepAliveSendStatsAsBody", 1);
-
-	plist_dict_end(pb);
-
-	size_t plist_len;
-	uint8_t *plist_data = plist_builder_finalize(pb, &plist_len);
-	plist_builder_destroy(pb);
+	size_t plist_len = 0;
+	uint8_t *plist_data = bplist_writer_finalize(bp, &plist_len);
+	bplist_writer_destroy(bp);
 
 	if (plist_data) {
 		resp->body = plist_data;
 		resp->body_length = plist_len;
 		http_response_add_header(resp, "Content-Type",
-					 "text/x-apple-plist+xml");
+					 "application/x-apple-binary-plist");
 	}
 }
 
@@ -164,91 +156,108 @@ static void handle_pair_verify(struct airplay_server *srv,
 				 "application/octet-stream");
 }
 
-/* ---------- Handle /stream (mirror setup) ---------- */
+/* ---------- Mirror receiver setup helper ---------- */
 
-static void handle_stream_setup(struct airplay_server *srv, socket_t client,
-				const struct http_request *req,
-				struct http_response *resp)
+static uint16_t ensure_mirror_started(struct airplay_server *srv)
 {
-	/*
-	 * POST /stream initiates screen mirroring.
-	 * The body is a binary plist with stream parameters.
-	 * After the HTTP response, the connection switches to
-	 * a binary protocol carrying H.264 frames.
-	 */
-
-	/* Start the mirror receiver on a separate port */
 	if (!srv->mirror) {
 		struct airplay_mirror_config mcfg = {0};
-		mcfg.port = srv->config.port + 1; /* Mirror data port */
+		mcfg.port = srv->config.port + 1;
 		mcfg.on_video_frame = srv->config.on_video_frame;
 		mcfg.on_audio_frame = srv->config.on_audio_frame;
 		mcfg.on_disconnect = srv->config.on_disconnect;
 		mcfg.userdata = srv->config.userdata;
 
 		srv->mirror = airplay_mirror_create(&mcfg);
-		if (srv->mirror) {
+		if (srv->mirror)
 			airplay_mirror_start(srv->mirror);
-		}
 	}
 
-	uint16_t mirror_port = srv->mirror
-				       ? airplay_mirror_get_port(srv->mirror)
-				       : 0;
-
-	/* Response: plist with data port and event port */
-	struct plist_builder *pb = plist_builder_create();
-	plist_dict_begin(pb);
-	plist_dict_add_int(pb, "dataPort", mirror_port);
-	plist_dict_add_int(pb, "eventPort", 0);
-	plist_dict_end(pb);
-
-	size_t plist_len;
-	uint8_t *plist_data = plist_builder_finalize(pb, &plist_len);
-	plist_builder_destroy(pb);
-
-	if (plist_data) {
-		resp->body = plist_data;
-		resp->body_length = plist_len;
-		http_response_add_header(resp, "Content-Type",
-					 "text/x-apple-plist+xml");
-	}
-
-	srv->connected = true;
+	return srv->mirror ? airplay_mirror_get_port(srv->mirror) : 0;
 }
 
-/* ---------- Handle SETUP (RTSP-like) ---------- */
+/* ---------- Handle SETUP (RTSP-like with binary plist) ---------- */
 
 static void handle_rtsp_setup(struct airplay_server *srv, socket_t client,
 			      const struct http_request *req,
 			      struct http_response *resp)
 {
-	/* RTSP SETUP for mirroring */
-	const char *ctype = http_request_get_header(req, "Content-Type");
+	(void)client;
 
-	if (ctype && strstr(ctype, "bplist")) {
-		/* Binary plist - stream setup */
-		handle_stream_setup(srv, client, req, resp);
-		return;
+	uint16_t mirror_port = ensure_mirror_started(srv);
+	uint16_t event_port = srv->config.port + 2;
+	uint16_t timing_port = srv->config.port + 3;
+
+	/* Log what iOS sent us in the bplist body */
+	if (req->body && req->body_length >= 8 &&
+	    memcmp(req->body, "bplist00", 8) == 0) {
+		struct bplist_reader *br =
+			bplist_reader_create(req->body, req->body_length);
+		if (br) {
+			int n = bplist_reader_dict_count(br);
+			ap_info("SETUP body: bplist with %d keys", n);
+			for (int i = 0; i < n; i++) {
+				const char *k = bplist_reader_get_key(br, i);
+				if (k)
+					ap_info("  key[%d]: %s", i, k);
+			}
+			bplist_reader_destroy(br);
+		} else {
+			ap_warn("SETUP body: bplist parse failed");
+		}
 	}
 
-	/* Return a generic setup response */
-	struct plist_builder *pb = plist_builder_create();
-	plist_dict_begin(pb);
-	plist_dict_add_int(pb, "eventPort", srv->config.port + 2);
-	plist_dict_add_int(pb, "timingPort", 0);
-	plist_dict_end(pb);
+	/* Build binary plist response with event/timing/data ports */
+	struct bplist_writer *bp = bplist_writer_create();
+	bplist_begin_dict(bp, 3);
+	bplist_dict_add_int(bp, "eventPort", event_port);
+	bplist_dict_add_int(bp, "timingPort", timing_port);
+	bplist_dict_add_int(bp, "dataPort", mirror_port);
 
-	size_t plist_len;
-	uint8_t *plist_data = plist_builder_finalize(pb, &plist_len);
-	plist_builder_destroy(pb);
+	size_t out_len = 0;
+	uint8_t *out = bplist_writer_finalize(bp, &out_len);
+	bplist_writer_destroy(bp);
 
-	if (plist_data) {
-		resp->body = plist_data;
-		resp->body_length = plist_len;
+	if (out) {
+		resp->body = out;
+		resp->body_length = out_len;
 		http_response_add_header(resp, "Content-Type",
-					 "text/x-apple-plist+xml");
+					 "application/x-apple-binary-plist");
+		ap_info("SETUP response: %zu bytes (mirror=%d event=%d timing=%d)",
+			out_len, mirror_port, event_port, timing_port);
 	}
+
+	srv->connected = true;
+}
+
+/* ---------- Handle POST /stream (alternate flow) ---------- */
+
+static void handle_stream_setup(struct airplay_server *srv, socket_t client,
+				const struct http_request *req,
+				struct http_response *resp)
+{
+	(void)client;
+	(void)req;
+
+	uint16_t mirror_port = ensure_mirror_started(srv);
+
+	struct bplist_writer *bp = bplist_writer_create();
+	bplist_begin_dict(bp, 2);
+	bplist_dict_add_int(bp, "dataPort", mirror_port);
+	bplist_dict_add_int(bp, "eventPort", 0);
+
+	size_t out_len = 0;
+	uint8_t *out = bplist_writer_finalize(bp, &out_len);
+	bplist_writer_destroy(bp);
+
+	if (out) {
+		resp->body = out;
+		resp->body_length = out_len;
+		http_response_add_header(resp, "Content-Type",
+					 "application/x-apple-binary-plist");
+	}
+
+	srv->connected = true;
 }
 
 /* ---------- HTTP request handler ---------- */
