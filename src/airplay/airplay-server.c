@@ -20,6 +20,8 @@
 #include "airplay-server.h"
 #include "airplay-mirror.h"
 #include "airplay-plist.h"
+#include "fairplay.h"
+#include "../log.h"
 #include "../network/http-server.h"
 #include "../network/mdns-publish.h"
 #include "../network/net-utils.h"
@@ -27,12 +29,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 struct airplay_server {
 	struct airplay_server_config config;
 	struct http_server *http;
 	struct mdns_publisher *mdns;
 	struct airplay_mirror *mirror;
+	struct fairplay *fp;
 
 	uint8_t device_id[6]; /* MAC address as device ID */
 	char device_id_str[18];
@@ -99,41 +103,25 @@ static void handle_fp_setup(struct airplay_server *srv,
 			     const struct http_request *req,
 			     struct http_response *resp)
 {
-	/*
-	 * FairPlay is Apple's DRM. For a receiver to work with modern iOS,
-	 * it needs to implement FairPlay-SAP. This is a complex proprietary
-	 * protocol. Open-source implementations exist (e.g., from RPiPlay)
-	 * that handle this with precomputed keys.
-	 *
-	 * For now, we return a minimal response. Full FairPlay support
-	 * would require additional crypto implementation.
-	 */
-
-	if (req->body_length >= 4) {
-		uint8_t type = req->body[0];
-
-		if (type == 1 && req->body_length == 16) {
-			/* FP-Setup phase 1 */
-			static const uint8_t fp_reply1[] = {
-				0x02, 0x00, 0x00, 0x00, /* response type */
-			};
-			/* A real implementation would return a 142-byte response */
-			resp->body = malloc(sizeof(fp_reply1));
-			memcpy(resp->body, fp_reply1, sizeof(fp_reply1));
-			resp->body_length = sizeof(fp_reply1);
-		} else if (type == 3) {
-			/* FP-Setup phase 2 */
-			static const uint8_t fp_reply2[] = {
-				0x04, 0x00, 0x00, 0x00,
-			};
-			resp->body = malloc(sizeof(fp_reply2));
-			memcpy(resp->body, fp_reply2, sizeof(fp_reply2));
-			resp->body_length = sizeof(fp_reply2);
-		}
+	if (!req->body || req->body_length < 16) {
+		ap_warn("fp-setup: body too small (%zu bytes)",
+			req->body_length);
+		resp->status_code = 400;
+		return;
 	}
 
-	http_response_add_header(resp, "Content-Type",
-				 "application/octet-stream");
+	size_t reply_len = 0;
+	uint8_t *reply = fairplay_handle_setup(srv->fp, req->body,
+					       req->body_length, &reply_len);
+
+	if (reply && reply_len > 0) {
+		resp->body = reply;
+		resp->body_length = reply_len;
+		http_response_add_header(resp, "Content-Type",
+					 "application/octet-stream");
+	} else {
+		resp->status_code = 400;
+	}
 }
 
 /* ---------- Handle pair-setup ---------- */
@@ -271,6 +259,9 @@ static void airplay_http_handler(void *userdata, socket_t client,
 {
 	struct airplay_server *srv = (struct airplay_server *)userdata;
 
+	ap_info("%s %s (body %zu bytes)", req->method, req->uri,
+		req->body_length);
+
 	resp->status_code = 200;
 	resp->status_text = "OK";
 
@@ -361,6 +352,8 @@ airplay_server_create(const struct airplay_server_config *cfg)
 		 "%02X:%02X:%02X:%02X:%02X:%02X", srv->device_id[0],
 		 srv->device_id[1], srv->device_id[2], srv->device_id[3],
 		 srv->device_id[4], srv->device_id[5]);
+
+	srv->fp = fairplay_create();
 
 	return srv;
 }
@@ -454,6 +447,9 @@ void airplay_server_destroy(struct airplay_server *srv)
 
 	if (srv->http)
 		http_server_destroy(srv->http);
+
+	if (srv->fp)
+		fairplay_destroy(srv->fp);
 
 	free(srv);
 }

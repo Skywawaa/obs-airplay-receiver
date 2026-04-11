@@ -12,6 +12,7 @@
 
 #include "mdns-publish.h"
 #include "net-utils.h"
+#include "../log.h"
 #include "../../deps/dns_sd.h"
 
 #include <stdlib.h>
@@ -39,14 +40,12 @@ static void register_callback(DNSServiceRef sdRef,
 	(void)context;
 
 	if (errorCode == kDNSServiceErr_NoError) {
-		fprintf(stderr,
-			"[AirPlay] mDNS service registered: %s.%s%s\n",
+		ap_info("mDNS service registered: %s.%s%s",
 			name ? name : "(null)", regtype ? regtype : "",
 			domain ? domain : "");
 	} else {
-		fprintf(stderr,
-			"[AirPlay] mDNS registration failed with error %d\n",
-			(int)errorCode);
+		ap_error("mDNS registration failed with error %d",
+			 (int)errorCode);
 	}
 }
 
@@ -110,15 +109,14 @@ struct mdns_publisher *mdns_publisher_create(const struct mdns_service *svc)
 	TXTRecordDeallocate(&txt);
 
 	if (err != kDNSServiceErr_NoError) {
-		fprintf(stderr,
-			"[AirPlay] DNSServiceRegister failed: %d "
-			"(is Bonjour Service running?)\n", (int)err);
+		ap_error("DNSServiceRegister failed: %d (is Bonjour Service running?)",
+			 (int)err);
 		free(pub);
 		return NULL;
 	}
 
 	pub->registered = true;
-	fprintf(stderr, "[AirPlay] mDNS registration requested for '%s' on %s port %d\n",
+	ap_info("mDNS registration requested for '%s' on %s port %d",
 		svc->name, regtype, svc->port);
 
 	return pub;

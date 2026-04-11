@@ -28,6 +28,7 @@ add_library(obs-airplay-receiver MODULE
     src/airplay/airplay-server.c
     src/airplay/airplay-mirror.c
     src/airplay/airplay-plist.c
+    src/airplay/fairplay.c
     src/network/http-server.c
     src/network/mdns-publish.c
     src/network/net-utils.c

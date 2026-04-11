@@ -16,3 +16,5 @@ cmake_install.cmake
 Makefile
 *.user
 *.suo
+deps/
+build_log.txt
