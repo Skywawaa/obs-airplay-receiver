@@ -5,6 +5,8 @@
 #include "net-utils.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
 
 #ifdef _WIN32
 static bool wsa_initialized = false;
