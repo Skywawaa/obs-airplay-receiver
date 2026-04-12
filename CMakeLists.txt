@@ -26,6 +26,8 @@ find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto crypto libcrypto-3-x64
         "${OPENSSL_DIR}/lib"
         "${OPENSSL_DIR}/lib/VC"
         "${OPENSSL_DIR}/lib/VC/x64"
+        "${OPENSSL_DIR}/lib/VC/x64/MD"
+        "${OPENSSL_DIR}/lib/VC/x64/MT"
         "${OPENSSL_DIR}/lib/VC/x86_64"
     NO_DEFAULT_PATH)
 if(NOT OPENSSL_CRYPTO_LIB)

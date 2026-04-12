@@ -338,7 +338,7 @@ jobs:
               target_compile_options(airplay PRIVATE /wd4244 /wd4267 /wd4996 /wd4018 /wd4146 /wd4005 /wd4133)
           endif()
           find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto crypto libcrypto-3-x64
-              PATHS "${OPENSSL_DIR}/lib" "${OPENSSL_DIR}/lib/VC" "${OPENSSL_DIR}/lib/VC/x64" "${OPENSSL_DIR}/lib/VC/x86_64"
+              PATHS "${OPENSSL_DIR}/lib" "${OPENSSL_DIR}/lib/VC" "${OPENSSL_DIR}/lib/VC/x64" "${OPENSSL_DIR}/lib/VC/x64/MD" "${OPENSSL_DIR}/lib/VC/x64/MT"
               NO_DEFAULT_PATH)
           if(NOT OPENSSL_CRYPTO_LIB)
               find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto crypto)
