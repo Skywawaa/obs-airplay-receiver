@@ -1,8 +1,12 @@
 # OBS AirPlay Receiver
 
+[![Build](https://github.com/aomkoyo/obs-airplay-receiver/actions/workflows/build.yml/badge.svg)](https://github.com/aomkoyo/obs-airplay-receiver/actions/workflows/build.yml)
+[![License: LGPL v2.1](https://img.shields.io/badge/License-LGPL_v2.1-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/aomkoyo/obs-airplay-receiver)](https://github.com/aomkoyo/obs-airplay-receiver/releases)
+
 An OBS Studio plugin that receives **AirPlay screen mirroring** from Apple devices (iPhone, iPad, Mac) on Windows and displays it as a video source with synchronized audio.
 
-![Screenshot placeholder](docs/screenshot.png)
+> **Built entirely with [Claude Code](https://claude.ai/code)** (Anthropic's AI coding agent) — from protocol implementation to CI/CD pipeline. This project is a Windows port of [mika314/obs-airplay](https://github.com/mika314/obs-airplay), using [UxPlay](https://github.com/FDH2/UxPlay)'s battle-tested AirPlay 2 protocol library.
 
 ## Features
 
@@ -116,15 +120,28 @@ All commands below should be run from a **VS Developer Command Prompt**.
 - **No audio** - Ensure the source's audio monitoring is enabled in the OBS audio mixer
 - **One client at a time** - AirPlay screen mirroring supports a single connected device
 
+## Built with Claude Code
+
+This entire project — from initial protocol implementation through debugging, Windows porting, CI/CD pipeline, and installer — was built using [Claude Code](https://claude.ai/code), Anthropic's AI coding agent. The development process included:
+
+- Porting UxPlay's POSIX-only AirPlay library to Windows (patching pthreads, sockets, endianness, timing)
+- Debugging real-time AirPlay connections with an actual iPhone
+- Building a complete CI pipeline that downloads and compiles 5 dependencies from source
+- Creating an Inno Setup installer for one-click installation
+
 ## Credits
 
-This project builds on the work of several open-source projects:
-
-- [UxPlay](https://github.com/antimof/UxPlay) - Open-source AirPlay server (core AirPlay protocol implementation)
-- [mika314/obs-airplay](https://github.com/nickkettner/obs-airplay) - OBS AirPlay plugin inspiration
-- [FFmpeg](https://ffmpeg.org/) - H.264 and AAC decoding
+- [UxPlay](https://github.com/FDH2/UxPlay) - Open-source AirPlay 2 server (core protocol: FairPlay, pairing, encryption)
+- [mika314/obs-airplay](https://github.com/mika314/obs-airplay) - Original OBS AirPlay plugin for Linux (inspiration and reference)
+- [FFmpeg](https://ffmpeg.org/) - H.264 and AAC-ELD decoding
 - [OBS Studio](https://obsproject.com/) - Plugin API
+- [libplist](https://github.com/libimobiledevice/libplist) - Apple binary plist format
+- [OpenSSL](https://www.openssl.org/) - Cryptography (AES, SHA, Ed25519)
+
+## Contributing
+
+Contributions welcome! Please open an issue or pull request.
 
 ## License
 
-MIT
+LGPL-2.1 — same as UxPlay, which this project depends on. See [LICENSE](LICENSE).
