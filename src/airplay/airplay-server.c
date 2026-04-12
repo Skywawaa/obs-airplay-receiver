@@ -20,6 +20,7 @@
 #include "airplay-server.h"
 #include "airplay-mirror.h"
 #include "airplay-plist.h"
+#include "airplay-ports.h"
 #include "bplist.h"
 #include "fairplay.h"
 #include "../log.h"
@@ -38,6 +39,10 @@ struct airplay_server {
 	struct mdns_publisher *mdns;
 	struct airplay_mirror *mirror;
 	struct fairplay *fp;
+
+	/* Auxiliary listeners spun up on demand during SETUP */
+	struct aux_port_listener *event_listener;
+	struct aux_port_listener *timing_listener;
 
 	uint8_t device_id[6]; /* MAC address as device ID */
 	char device_id_str[18];
@@ -187,6 +192,13 @@ static void handle_rtsp_setup(struct airplay_server *srv, socket_t client,
 	uint16_t mirror_port = ensure_mirror_started(srv);
 	uint16_t event_port = srv->config.port + 2;
 	uint16_t timing_port = srv->config.port + 3;
+
+	/* Start auxiliary listeners on demand so iOS can actually
+	 * connect to the ports we advertised */
+	if (!srv->event_listener)
+		srv->event_listener = aux_tcp_listener_start(event_port);
+	if (!srv->timing_listener)
+		srv->timing_listener = aux_udp_listener_start(timing_port);
 
 	/* Log what iOS sent us in the bplist body */
 	if (req->body && req->body_length >= 8 &&
@@ -432,6 +444,16 @@ void airplay_server_stop(struct airplay_server *srv)
 		airplay_mirror_stop(srv->mirror);
 		airplay_mirror_destroy(srv->mirror);
 		srv->mirror = NULL;
+	}
+
+	if (srv->event_listener) {
+		aux_listener_stop(srv->event_listener);
+		srv->event_listener = NULL;
+	}
+
+	if (srv->timing_listener) {
+		aux_listener_stop(srv->timing_listener);
+		srv->timing_listener = NULL;
 	}
 
 	if (srv->mdns) {
