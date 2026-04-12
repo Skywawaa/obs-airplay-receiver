@@ -24,53 +24,69 @@ jobs:
       - name: Install OpenSSL via Chocolatey
         run: choco install openssl -y --no-progress
 
+      - name: Create deps directory
+        shell: bash
+        run: mkdir -p deps
+
       - name: Download OBS Studio SDK 32.1.1
         shell: bash
         run: |
           curl -L -o deps/obs-sdk.zip \
-            https://github.com/obsproject/obs-studio/archive/refs/tags/32.1.1.zip
+            "https://github.com/obsproject/obs-studio/archive/refs/tags/32.1.1.zip"
           mkdir -p deps/obs-sdk
           cd deps/obs-sdk
           unzip -q ../obs-sdk.zip
+
+      - name: Create obsconfig.h for OBS SDK
+        shell: bash
+        run: |
+          cat > deps/obs-sdk/obs-studio-32.1.1/libobs/obsconfig.h << 'EOF'
+          #pragma once
+          #define OBS_DATA_PATH "data"
+          #define OBS_PLUGIN_PATH "obs-plugins/64bit"
+          #define OBS_PLUGIN_DESTINATION "obs-plugins/64bit"
+          #define OBS_RELEASE_CANDIDATE 0
+          #define OBS_BETA 0
+          EOF
 
       - name: Download FFmpeg 7.1 headers
         shell: bash
         run: |
           curl -L -o deps/ffmpeg7-headers.zip \
-            https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.1.1.zip
-          mkdir -p deps/ffmpeg7-include
+            "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n7.1.1.zip"
           cd deps
           unzip -q ffmpeg7-headers.zip
-          # Copy just the headers we need
+          mkdir -p ffmpeg7-include
           for lib in libavcodec libavutil libswscale libswresample; do
             mkdir -p ffmpeg7-include/$lib
             cp FFmpeg-n7.1.1/$lib/*.h ffmpeg7-include/$lib/
           done
+          # Create required generated headers
+          cat > ffmpeg7-include/libavutil/avconfig.h << 'AVEOF'
+          #ifndef AVUTIL_AVCONFIG_H
+          #define AVUTIL_AVCONFIG_H
+          #define AV_HAVE_BIGENDIAN 0
+          #define AV_HAVE_FAST_UNALIGNED 1
+          #endif
+          AVEOF
+          cat > ffmpeg7-include/libavutil/ffversion.h << 'FFEOF'
+          #ifndef AVUTIL_FFVERSION_H
+          #define AVUTIL_FFVERSION_H
+          #define FFMPEG_VERSION "7.1.1"
+          #endif
+          FFEOF
 
       - name: Download libplist 2.7.0
         shell: bash
         run: |
           curl -L -o deps/libplist.zip \
-            https://github.com/libimobiledevice/libplist/releases/download/2.7.0/libplist-2.7.0.tar.bz2
-          # Try release tarball first, fall back to GitHub archive
-          if ! tar -xjf deps/libplist.zip -C deps/ 2>/dev/null; then
-            rm -f deps/libplist.zip
-            curl -L -o deps/libplist.zip \
-              https://github.com/libimobiledevice/libplist/archive/refs/tags/2.7.0.zip
-            cd deps && unzip -q libplist.zip && cd ..
-            # Rename if needed
-            if [ -d deps/libplist-2.7.0 ]; then
-              echo "libplist-2.7.0 directory already exists"
-            elif [ -d deps/libplist-2.7.0 ]; then
-              echo "OK"
-            fi
-          fi
+            "https://github.com/libimobiledevice/libplist/archive/refs/tags/2.7.0.zip"
+          cd deps && unzip -q libplist.zip
 
       - name: Create libplist config.h
         shell: bash
         run: |
-          cat > deps/libplist-2.7.0/config.h << 'CONFIGEOF'
-          /* Hand-written config.h for building libplist on Windows with MSVC */
+          cat > deps/libplist-2.7.0/config.h << 'EOF'
           #pragma once
           #define PACKAGE_VERSION "2.7.0"
           #define PACKAGE_NAME "libplist"
@@ -88,7 +104,7 @@ jobs:
           typedef SSIZE_T ssize_t;
           #endif
           #endif
-          CONFIGEOF
+          EOF
 
       - name: Build libplist
         run: |
@@ -99,46 +115,86 @@ jobs:
           cmake .. -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl
           nmake
 
-      - name: Generate import libraries (obs.lib, w32-pthreads.lib)
-        run: |
-          lib /def:deps\obs.def /out:deps\obs.lib /machine:x64
-          lib /def:deps\w32-pthreads.def /out:deps\w32-pthreads.lib /machine:x64
-
-      - name: Create stub dnssd.lib
+      - name: Generate import libraries
         shell: bash
         run: |
-          # UxPlay loads dnssd.dll dynamically via LoadLibrary at runtime,
-          # so we only need a stub .lib to satisfy the linker.
-          if [ -f deps/dnssd.def ]; then
-            lib /def:deps/dnssd.def /out:deps/dnssd.lib /machine:x64 || true
-          else
-            # Create a minimal .def and generate stub lib
-            echo -e "LIBRARY dnssd\nEXPORTS\n    DNSServiceRegister\n    DNSServiceProcessResult\n    DNSServiceRefDeallocate\n    DNSServiceRefSockFD" > deps/dnssd.def
-            lib /def:deps/dnssd.def /out:deps/dnssd.lib /machine:x64
-          fi
+          # Generate stub .def files for OBS and dependencies
+          # obs.lib
+          cat > deps/obs.def << 'EOF'
+          LIBRARY obs
+          EXPORTS
+              obs_register_source
+              obs_source_output_video
+              obs_source_output_audio
+              obs_data_get_string
+              obs_data_get_int
+              obs_data_get_bool
+              obs_data_set_default_string
+              obs_data_set_default_int
+              obs_data_set_default_bool
+              obs_properties_create
+              obs_properties_add_text
+              obs_properties_add_int
+              obs_properties_add_bool
+              obs_properties_add_list
+              obs_property_list_add_string
+              obs_property_list_add_int
+              obs_get_locale
+              blog
+              bzalloc
+              bfree
+          EOF
+          lib //def:deps/obs.def //out:deps/obs.lib //machine:x64
+
+          # w32-pthreads.lib
+          cat > deps/w32-pthreads.def << 'EOF'
+          LIBRARY w32-pthreads
+          EXPORTS
+              pthread_create
+              pthread_join
+              pthread_mutex_init
+              pthread_mutex_destroy
+              pthread_mutex_lock
+              pthread_mutex_unlock
+              pthread_cond_init
+              pthread_cond_destroy
+              pthread_cond_signal
+              pthread_cond_broadcast
+              pthread_cond_wait
+              pthread_cond_timedwait
+          EOF
+          lib //def:deps/w32-pthreads.def //out:deps/w32-pthreads.lib //machine:x64
+
+          # dnssd.lib (stub - UxPlay loads via LoadLibrary at runtime)
+          cat > deps/dnssd.def << 'EOF'
+          LIBRARY dnssd
+          EXPORTS
+              DNSServiceRegister
+              DNSServiceRefDeallocate
+              TXTRecordCreate
+              TXTRecordDeallocate
+              TXTRecordSetValue
+              TXTRecordGetLength
+              TXTRecordGetBytesPtr
+          EOF
+          lib //def:deps/dnssd.def //out:deps/dnssd.lib //machine:x64
 
       - name: Create FFmpeg stub libs
         shell: bash
         run: |
-          # Create minimal stub libs for FFmpeg - the plugin loads these from OBS at runtime
           mkdir -p deps/obs-ffmpeg-libs
-          for lib in avcodec avutil swscale swresample; do
-            if [ -f deps/${lib}.def ]; then
-              lib /def:deps/${lib}.def /out:deps/obs-ffmpeg-libs/${lib}.lib /machine:x64 || true
-            else
-              echo -e "LIBRARY ${lib}\nEXPORTS\n    dummy_${lib}" > deps/${lib}.def
-              lib /def:deps/${lib}.def /out:deps/obs-ffmpeg-libs/${lib}.lib /machine:x64
-            fi
+          for name in avcodec avutil swscale swresample; do
+            echo -e "LIBRARY ${name}\nEXPORTS\n    av_dummy_${name}" > deps/${name}.def
+            lib //def:deps/${name}.def //out:deps/obs-ffmpeg-libs/${name}.lib //machine:x64
           done
 
       - name: Set OpenSSL path
         id: openssl
         shell: bash
         run: |
-          # Chocolatey installs OpenSSL here
-          OPENSSL_DIR="C:/Program Files/OpenSSL-Win64"
-          if [ ! -d "$OPENSSL_DIR" ]; then
-            OPENSSL_DIR="C:/Program Files/OpenSSL"
+          OPENSSL_DIR="C:/Program Files/OpenSSL"
+          if [ -d "C:/Program Files/OpenSSL-Win64" ]; then
+            OPENSSL_DIR="C:/Program Files/OpenSSL-Win64"
           fi
           echo "dir=$OPENSSL_DIR" >> "$GITHUB_OUTPUT"
           echo "OpenSSL dir: $OPENSSL_DIR"
@@ -165,7 +221,6 @@ jobs:
         run: |
           mkdir -p artifact
           cp build/obs-airplay-receiver.dll artifact/
-          # Copy OpenSSL libcrypto DLL
           OPENSSL_DIR="${{ steps.openssl.outputs.dir }}"
           if [ -f "$OPENSSL_DIR/bin/libcrypto-3-x64.dll" ]; then
             cp "$OPENSSL_DIR/bin/libcrypto-3-x64.dll" artifact/
