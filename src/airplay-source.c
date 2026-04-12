@@ -154,9 +154,19 @@ static void cb_video_process(void *cls, raop_ntp_t *ntp,
 	if (!ctx->vdec)
 		return;
 
-	if (video_frame_count < 5)
+	if (video_frame_count < 5) {
 		blog(LOG_INFO, "[AirPlay] video_process: %d bytes, %d NALs, pts=%llu",
 		     data->data_len, data->nal_count, (unsigned long long)data->pts);
+		if (data->data_len >= 16) {
+			blog(LOG_INFO, "[AirPlay] H264 first 16 bytes: "
+			     "%02x %02x %02x %02x %02x %02x %02x %02x "
+			     "%02x %02x %02x %02x %02x %02x %02x %02x",
+			     data->data[0], data->data[1], data->data[2], data->data[3],
+			     data->data[4], data->data[5], data->data[6], data->data[7],
+			     data->data[8], data->data[9], data->data[10], data->data[11],
+			     data->data[12], data->data[13], data->data[14], data->data[15]);
+		}
+	}
 
 	struct decoded_frame frame = {0};
 	if (!video_decoder_decode(ctx->vdec, data->data, data->data_len,

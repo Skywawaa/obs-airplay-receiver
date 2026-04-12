@@ -192,16 +192,28 @@ bool video_decoder_decode(struct video_decoder *dec, const uint8_t *h264_data,
 	dec->pkt->pts = (int64_t)pts;
 	dec->pkt->dts = (int64_t)pts;
 
-	int ret = avcodec_send_packet(dec->ctx, dec->pkt);
-	if (ret < 0) {
-		/* Not an error if we just need more data */
-		if (ret == AVERROR(EAGAIN))
-			return false;
+	/* FFmpeg decode flow: try receive first (drain), then send, then receive.
+	 * This matches what mika314's decoder does and handles the case where
+	 * the decoder needs multiple packets before producing output. */
+	int got_picture = 0;
+	int ret = avcodec_receive_frame(dec->ctx, dec->frame);
+	if (ret == 0)
+		got_picture = 1;
+	if (ret == AVERROR(EAGAIN))
+		ret = 0;
+	if (ret == 0)
+		ret = avcodec_send_packet(dec->ctx, dec->pkt);
+
+	if (ret < 0 && ret != AVERROR(EAGAIN))
 		return false;
+
+	if (!got_picture) {
+		ret = avcodec_receive_frame(dec->ctx, dec->frame);
+		if (ret == 0)
+			got_picture = 1;
 	}
 
-	ret = avcodec_receive_frame(dec->ctx, dec->frame);
-	if (ret < 0)
+	if (!got_picture)
 		return false;
 
 	/* Convert to NV12 if not already */
