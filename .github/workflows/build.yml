@@ -213,9 +213,52 @@ jobs:
           EOFDEF
 
           mkdir -p deps/obs-ffmpeg-libs
-          for name in avcodec avutil swscale swresample; do
-            printf "LIBRARY ${name}\nEXPORTS\n    av_dummy_${name}\n" > deps/${name}.def
-          done
+
+          cat > deps/avcodec.def << 'FFDEF'
+          LIBRARY avcodec
+          EXPORTS
+              avcodec_find_decoder
+              avcodec_find_decoder_by_name
+              avcodec_alloc_context3
+              avcodec_free_context
+              avcodec_open2
+              avcodec_send_packet
+              avcodec_receive_frame
+              av_packet_alloc
+              av_packet_free
+          FFDEF
+
+          cat > deps/avutil.def << 'FFDEF'
+          LIBRARY avutil
+          EXPORTS
+              av_frame_alloc
+              av_frame_free
+              av_image_alloc
+              av_freep
+              av_free
+              av_malloc
+              av_mallocz
+              av_strerror
+              av_channel_layout_default
+              av_get_pix_fmt_string
+          FFDEF
+
+          cat > deps/swscale.def << 'FFDEF'
+          LIBRARY swscale
+          EXPORTS
+              sws_getContext
+              sws_freeContext
+              sws_scale
+          FFDEF
+
+          cat > deps/swresample.def << 'FFDEF'
+          LIBRARY swresample
+          EXPORTS
+              swr_alloc_set_opts2
+              swr_init
+              swr_free
+              swr_convert
+          FFDEF
 
       - name: Generate import libraries from def files
         shell: cmd
