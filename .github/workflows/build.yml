@@ -107,6 +107,7 @@ jobs:
           EOF
 
       - name: Build libplist
+        shell: cmd
         run: |
           cd deps\libplist-2.7.0
           if exist build rmdir /s /q build
@@ -200,6 +201,7 @@ jobs:
           echo "OpenSSL dir: $OPENSSL_DIR"
 
       - name: Build UxPlay libraries
+        shell: cmd
         run: |
           cd deps\uxplay-build
           if exist build rmdir /s /q build
@@ -209,6 +211,7 @@ jobs:
           nmake
 
       - name: Build plugin
+        shell: cmd
         run: |
           if exist build rmdir /s /q build
           mkdir build
