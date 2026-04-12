@@ -147,12 +147,11 @@ jobs:
           cmake .. -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl
           nmake
 
-      - name: Generate import libraries
+      - name: Create def files
         shell: bash
         run: |
-          # Generate stub .def files for OBS and dependencies
-          # obs.lib
-          cat > deps/obs.def << 'EOF'
+          # Create .def files if not present
+          cat > deps/obs.def << 'EOFDEF'
           LIBRARY obs
           EXPORTS
               obs_register_source
@@ -175,11 +174,9 @@ jobs:
               blog
               bzalloc
               bfree
-          EOF
-          lib //def:deps/obs.def //out:deps/obs.lib //machine:x64
+          EOFDEF
 
-          # w32-pthreads.lib
-          cat > deps/w32-pthreads.def << 'EOF'
+          cat > deps/w32-pthreads.def << 'EOFDEF'
           LIBRARY w32-pthreads
           EXPORTS
               pthread_create
@@ -194,11 +191,9 @@ jobs:
               pthread_cond_broadcast
               pthread_cond_wait
               pthread_cond_timedwait
-          EOF
-          lib //def:deps/w32-pthreads.def //out:deps/w32-pthreads.lib //machine:x64
+          EOFDEF
 
-          # dnssd.lib (stub - UxPlay loads via LoadLibrary at runtime)
-          cat > deps/dnssd.def << 'EOF'
+          cat > deps/dnssd.def << 'EOFDEF'
           LIBRARY dnssd
           EXPORTS
               DNSServiceRegister
@@ -208,17 +203,22 @@ jobs:
               TXTRecordSetValue
               TXTRecordGetLength
               TXTRecordGetBytesPtr
-          EOF
-          lib //def:deps/dnssd.def //out:deps/dnssd.lib //machine:x64
+          EOFDEF
 
-      - name: Create FFmpeg stub libs
-        shell: bash
-        run: |
           mkdir -p deps/obs-ffmpeg-libs
           for name in avcodec avutil swscale swresample; do
-            echo -e "LIBRARY ${name}\nEXPORTS\n    av_dummy_${name}" > deps/${name}.def
-            lib //def:deps/${name}.def //out:deps/obs-ffmpeg-libs/${name}.lib //machine:x64
+            printf "LIBRARY ${name}\nEXPORTS\n    av_dummy_${name}\n" > deps/${name}.def
           done
+
+      - name: Generate import libraries from def files
+        shell: cmd
+        run: |
+          lib /def:deps\obs.def /out:deps\obs.lib /machine:x64
+          lib /def:deps\w32-pthreads.def /out:deps\w32-pthreads.lib /machine:x64
+          lib /def:deps\dnssd.def /out:deps\dnssd.lib /machine:x64
+          for %%f in (avcodec avutil swscale swresample) do (
+            lib /def:deps\%%f.def /out:deps\obs-ffmpeg-libs\%%f.lib /machine:x64
+          )
 
       - name: Set OpenSSL path
         id: openssl
