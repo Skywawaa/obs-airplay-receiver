@@ -20,6 +20,14 @@ if(NOT DEFINED OPENSSL_DIR)
     set(OPENSSL_DIR "C:/Users/kitti/scoop/apps/openssl/current")
 endif()
 
+# Find OpenSSL libcrypto
+find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto crypto
+    PATHS "${OPENSSL_DIR}/lib" "${OPENSSL_DIR}/lib/VC" "${OPENSSL_DIR}/lib/VC/x64"
+    NO_DEFAULT_PATH)
+if(NOT OPENSSL_CRYPTO_LIB)
+    find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto crypto)
+endif()
+
 # libplist
 set(LIBPLIST_DIR "${DEPS_DIR}/libplist-2.7.0")
 
@@ -67,7 +75,7 @@ target_link_libraries(obs-airplay-receiver PRIVATE ${DEPS_DIR}/obs.lib)
 
 # OpenSSL
 target_link_libraries(obs-airplay-receiver PRIVATE
-    ${OPENSSL_DIR}/lib/libcrypto.lib
+    ${OPENSSL_CRYPTO_LIB}
 )
 
 # FFmpeg
