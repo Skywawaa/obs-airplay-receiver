@@ -28,6 +28,12 @@ jobs:
         shell: bash
         run: mkdir -p deps
 
+      - name: Clone UxPlay (mika314/obs-airplay)
+        shell: bash
+        run: |
+          git clone --depth 1 --recurse-submodules \
+            https://github.com/mika314/obs-airplay.git deps/mika-obs-airplay
+
       - name: Download OBS Studio SDK 32.1.1
         shell: bash
         run: |
@@ -104,6 +110,31 @@ jobs:
           typedef SSIZE_T ssize_t;
           #endif
           #endif
+          EOF
+
+      - name: Create libplist CMakeLists.txt
+        shell: bash
+        run: |
+          cat > deps/libplist-2.7.0/CMakeLists.txt << 'EOF'
+          cmake_minimum_required(VERSION 3.16)
+          project(libplist C CXX)
+          add_library(plist STATIC
+              src/base64.c src/bplist.c src/bytearray.c src/hashtable.c
+              src/jplist.c src/jsmn.c src/oplist.c src/out-default.c
+              src/out-limd.c src/out-plutil.c src/plist.c src/ptrarray.c
+              src/time64.c src/xplist.c
+              libcnary/cnary.c libcnary/node.c libcnary/node_list.c
+          )
+          target_include_directories(plist PUBLIC
+              ${CMAKE_CURRENT_SOURCE_DIR}/include
+              ${CMAKE_CURRENT_SOURCE_DIR}/libcnary/include
+              ${CMAKE_CURRENT_SOURCE_DIR}/src
+              ${CMAKE_CURRENT_SOURCE_DIR}
+          )
+          target_compile_definitions(plist PRIVATE HAVE_CONFIG_H=1 _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
+          if(MSVC)
+              target_compile_options(plist PRIVATE /wd4244 /wd4267 /wd4996 /wd4018 /wd4047 /wd4024 /wd4789)
+          endif()
           EOF
 
       - name: Build libplist
@@ -199,6 +230,119 @@ jobs:
           fi
           echo "dir=$OPENSSL_DIR" >> "$GITHUB_OUTPUT"
           echo "OpenSSL dir: $OPENSSL_DIR"
+
+      - name: Apply UxPlay Windows patches and create build config
+        shell: bash
+        run: |
+          UXLIB="deps/mika-obs-airplay/UxPlay/lib"
+
+          # Patch compat.h - add winsock2, gettimeofday, remove snprintf macro
+          sed -i 's/#include <ws2tcpip.h>/#include <winsock2.h>\n#include <ws2tcpip.h>/' "$UXLIB/compat.h"
+          sed -i '/#ifndef snprintf/,/#endif/d' "$UXLIB/compat.h"
+          # Add gettimeofday after windows.h include
+          sed -i '/#include <windows.h>/a #include <pthread.h>\nstatic __inline int gettimeofday(struct timeval *tv, void *tz) { FILETIME ft; ULARGE_INTEGER ui; GetSystemTimeAsFileTime(\&ft); ui.LowPart=ft.dwLowDateTime; ui.HighPart=ft.dwHighDateTime; ui.QuadPart-=116444736000000000ULL; tv->tv_sec=(long)(ui.QuadPart/10000000ULL); tv->tv_usec=(long)((ui.QuadPart%10000000ULL)/10); (void)tz; return 0; }' "$UXLIB/compat.h"
+
+          # Patch threads.h - use w32-pthreads
+          cat > "$UXLIB/threads.h" << 'THEOF'
+          #ifndef THREADS_H
+          #define THREADS_H
+          #if defined(WIN32)
+          #include <windows.h>
+          #include <pthread.h>
+          #define sleepms(x) Sleep(x)
+          #else
+          #include <pthread.h>
+          #include <unistd.h>
+          #define sleepms(x) usleep((x)*1000)
+          #endif
+          typedef pthread_t thread_handle_t;
+          #define THREAD_RETVAL void *
+          #define THREAD_CREATE(handle, func, arg) pthread_create(&(handle), NULL, func, arg)
+          #define THREAD_JOIN(handle) pthread_join(handle, NULL)
+          typedef pthread_mutex_t mutex_handle_t;
+          typedef pthread_cond_t cond_handle_t;
+          #define MUTEX_CREATE(handle) pthread_mutex_init(&(handle), NULL)
+          #define MUTEX_LOCK(handle) pthread_mutex_lock(&(handle))
+          #define MUTEX_UNLOCK(handle) pthread_mutex_unlock(&(handle))
+          #define MUTEX_DESTROY(handle) pthread_mutex_destroy(&(handle))
+          #define COND_CREATE(handle) pthread_cond_init(&(handle), NULL)
+          #define COND_SIGNAL(handle) pthread_cond_signal(&(handle))
+          #define COND_DESTROY(handle) pthread_cond_destroy(&(handle))
+          #endif
+          THEOF
+
+          # Patch byteutils.c
+          sed -i 's|#include <netinet/in.h>|#if defined(WIN32)\n#include <winsock2.h>\n#else\n#include <netinet/in.h>\n#endif|' "$UXLIB/byteutils.c"
+          sed -i 's|#include <endian.h>|#if !defined(WIN32)\n#include <endian.h>\n#endif|' "$UXLIB/byteutils.c"
+
+          # Patch raop_rtp_mirror.c
+          sed -i 's|#include <netinet/tcp.h>|#if defined(WIN32)\n#include <winsock2.h>\n#define SOL_TCP IPPROTO_TCP\n#else\n#include <netinet/tcp.h>\n#endif|' "$UXLIB/raop_rtp_mirror.c"
+
+          # Patch raop_ntp.c - clock_gettime and ioctl
+          sed -i 's|clock_gettime(CLOCK_REALTIME, \&time);|gettimeofday(\&time, NULL);|' "$UXLIB/raop_ntp.c"
+          sed -i 's|struct timespec time;|struct timeval time;|' "$UXLIB/raop_ntp.c"
+          sed -i 's|time.tv_nsec / 1000|time.tv_usec|' "$UXLIB/raop_ntp.c"
+          sed -i 's|while (ioctl(fd, FIONREAD, \&bytes_available)|#if defined(WIN32)\n    while (ioctlsocket(fd, FIONREAD, (u_long *)\&bytes_available)|' "$UXLIB/raop_ntp.c"
+          sed -i '/ioctlsocket.*FIONREAD/a #else\n    while (ioctl(fd, FIONREAD, \&bytes_available) == 0 \&\& bytes_available > 0)\n#endif' "$UXLIB/raop_ntp.c" || true
+
+          # Patch dnssd.c - don't include system dns_sd.h
+          sed -i 's|^#include <dns_sd.h>|#if !defined(WIN32)\n#include <dns_sd.h>\n#endif|' "$UXLIB/dnssd.c"
+
+          # Patch httpd.c - add MUTEX_CREATE
+          sed -i '/httpd->joined = 1;/a\    MUTEX_CREATE(httpd->run_mutex);' "$UXLIB/httpd.c"
+
+          # Create uxplay-build CMakeLists.txt
+          mkdir -p deps/uxplay-build
+          cat > deps/uxplay-build/CMakeLists.txt << 'CMEOF'
+          cmake_minimum_required(VERSION 3.16)
+          project(uxplay-airplay C)
+          set(UXPLAY_LIB "${CMAKE_CURRENT_SOURCE_DIR}/../mika-obs-airplay/UxPlay/lib")
+          set(LIBPLIST_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../libplist-2.7.0")
+          if(NOT DEFINED OPENSSL_DIR)
+              set(OPENSSL_DIR "C:/Program Files/OpenSSL")
+          endif()
+          set(W32_PTHREADS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../obs-sdk/obs-studio-32.1.1/deps/w32-pthreads")
+          set(DNSSD_LIB "${CMAKE_CURRENT_SOURCE_DIR}/../dnssd.lib")
+          aux_source_directory(${UXPLAY_LIB}/playfair playfair_src)
+          add_library(playfair STATIC ${playfair_src})
+          target_include_directories(playfair PUBLIC ${UXPLAY_LIB}/playfair)
+          target_compile_definitions(playfair PRIVATE _CRT_SECURE_NO_WARNINGS WIN32_LEAN_AND_MEAN)
+          if(MSVC)
+              target_compile_options(playfair PRIVATE /wd4244 /wd4267 /wd4996)
+          endif()
+          aux_source_directory(${UXPLAY_LIB}/llhttp llhttp_src)
+          add_library(llhttp STATIC ${llhttp_src})
+          target_include_directories(llhttp PUBLIC ${UXPLAY_LIB}/llhttp)
+          target_compile_definitions(llhttp PRIVATE _CRT_SECURE_NO_WARNINGS)
+          if(MSVC)
+              target_compile_options(llhttp PRIVATE /wd4244 /wd4267 /wd4996)
+          endif()
+          set(AIRPLAY_SOURCES
+              ${UXPLAY_LIB}/byteutils.c ${UXPLAY_LIB}/crypto.c ${UXPLAY_LIB}/dnssd.c
+              ${UXPLAY_LIB}/fairplay_playfair.c ${UXPLAY_LIB}/http_request.c
+              ${UXPLAY_LIB}/http_response.c ${UXPLAY_LIB}/httpd.c ${UXPLAY_LIB}/logger.c
+              ${UXPLAY_LIB}/mirror_buffer.c ${UXPLAY_LIB}/netutils.c ${UXPLAY_LIB}/pairing.c
+              ${UXPLAY_LIB}/raop.c ${UXPLAY_LIB}/raop_buffer.c ${UXPLAY_LIB}/raop_ntp.c
+              ${UXPLAY_LIB}/raop_rtp.c ${UXPLAY_LIB}/raop_rtp_mirror.c ${UXPLAY_LIB}/utils.c
+          )
+          add_library(airplay STATIC ${AIRPLAY_SOURCES})
+          target_include_directories(airplay PUBLIC
+              ${UXPLAY_LIB} ${UXPLAY_LIB}/playfair ${UXPLAY_LIB}/llhttp
+              ${LIBPLIST_DIR}/include ${OPENSSL_DIR}/include ${W32_PTHREADS_DIR}
+          )
+          target_compile_definitions(airplay PUBLIC
+              WIN32 _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE
+              WIN32_LEAN_AND_MEAN LIBPLIST_STATIC OPENSSL_API_COMPAT=0x10101000L
+          )
+          if(MSVC)
+              target_compile_options(airplay PRIVATE /wd4244 /wd4267 /wd4996 /wd4018 /wd4146 /wd4005 /wd4133)
+          endif()
+          target_link_libraries(airplay PUBLIC playfair llhttp
+              ${LIBPLIST_DIR}/build/plist.lib ${OPENSSL_DIR}/lib/libcrypto.lib
+              ${DNSSD_LIB} ${CMAKE_CURRENT_SOURCE_DIR}/../w32-pthreads.lib
+              ws2_32 iphlpapi
+          )
+          CMEOF
 
       - name: Build UxPlay libraries
         shell: cmd
