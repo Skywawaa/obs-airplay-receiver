@@ -370,6 +370,17 @@ static void stop_server(struct airplay_source *ctx)
 	}
 }
 
+/* ---------- Helpers ---------- */
+
+static void parse_resolution(const char *res_str, int *w, int *h)
+{
+	*w = 0;
+	*h = 0;
+	if (!res_str || strcmp(res_str, "0x0") == 0)
+		return;
+	sscanf(res_str, "%dx%d", w, h);
+}
+
 /* ---------- OBS Source API ---------- */
 
 static const char *airplay_get_name(void *unused)
@@ -398,10 +409,13 @@ static void *airplay_create(obs_data_t *settings, obs_source_t *source)
 		(name && *name) ? name : "OBS AirPlay",
 		sizeof(ctx->server_name) - 1);
 	ctx->use_random_mac = obs_data_get_bool(settings, "use_random_mac");
-	ctx->cfg_width = (int)obs_data_get_int(settings, "width");
-	ctx->cfg_height = (int)obs_data_get_int(settings, "height");
-	ctx->cfg_fps = (int)obs_data_get_int(settings, "fps");
-	ctx->cfg_max_fps = (int)obs_data_get_int(settings, "max_fps");
+
+	const char *res = obs_data_get_string(settings, "resolution");
+	parse_resolution(res, &ctx->cfg_width, &ctx->cfg_height);
+
+	int fps_val = (int)obs_data_get_int(settings, "fps_preset");
+	ctx->cfg_fps = fps_val;
+	ctx->cfg_max_fps = fps_val;
 
 	if (!start_server(ctx)) {
 		blog(LOG_ERROR, "[AirPlay] Failed to start server");
@@ -428,10 +442,11 @@ static void airplay_update(void *data, obs_data_t *settings)
 	struct airplay_source *ctx = data;
 	const char *name = obs_data_get_string(settings, "server_name");
 	bool random_mac = obs_data_get_bool(settings, "use_random_mac");
-	int w = (int)obs_data_get_int(settings, "width");
-	int h = (int)obs_data_get_int(settings, "height");
-	int fps = (int)obs_data_get_int(settings, "fps");
-	int max_fps = (int)obs_data_get_int(settings, "max_fps");
+	const char *res = obs_data_get_string(settings, "resolution");
+	int fps = (int)obs_data_get_int(settings, "fps_preset");
+
+	int w = 0, h = 0;
+	parse_resolution(res, &w, &h);
 
 	bool need_restart = false;
 
@@ -449,9 +464,9 @@ static void airplay_update(void *data, obs_data_t *settings)
 		ctx->cfg_height = h;
 		need_restart = true;
 	}
-	if (ctx->cfg_fps != fps || ctx->cfg_max_fps != max_fps) {
+	if (ctx->cfg_fps != fps) {
 		ctx->cfg_fps = fps;
-		ctx->cfg_max_fps = max_fps;
+		ctx->cfg_max_fps = fps;
 		need_restart = true;
 	}
 
@@ -469,15 +484,20 @@ static obs_properties_t *airplay_get_properties(void *data)
 	obs_properties_add_text(p, "server_name", "Server Name",
 				OBS_TEXT_DEFAULT);
 
-	obs_property_t *w = obs_properties_add_int(p, "width",
-		"Width (0 = auto)", 0, 3840, 1);
-	obs_property_t *h = obs_properties_add_int(p, "height",
-		"Height (0 = auto)", 0, 2160, 1);
+	obs_property_t *res = obs_properties_add_list(p, "resolution",
+		"Resolution", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+	obs_property_list_add_string(res, "Source (device native)", "0x0");
+	obs_property_list_add_string(res, "1920x1080 (1080p)", "1920x1080");
+	obs_property_list_add_string(res, "1280x720 (720p)", "1280x720");
+	obs_property_list_add_string(res, "3840x2160 (4K)", "3840x2160");
+	obs_property_list_add_string(res, "2560x1440 (1440p)", "2560x1440");
 
-	obs_properties_add_int(p, "fps",
-		"Refresh Rate (0 = default 60)", 0, 240, 1);
-	obs_properties_add_int(p, "max_fps",
-		"Max FPS (0 = default 30)", 0, 240, 1);
+	obs_property_t *fps = obs_properties_add_list(p, "fps_preset",
+		"FPS", OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+	obs_property_list_add_int(fps, "60 FPS", 60);
+	obs_property_list_add_int(fps, "30 FPS", 30);
+	obs_property_list_add_int(fps, "120 FPS", 120);
+	obs_property_list_add_int(fps, "24 FPS", 24);
 
 	obs_properties_add_bool(p, "use_random_mac",
 				"Use Random MAC Address");
@@ -488,10 +508,8 @@ static obs_properties_t *airplay_get_properties(void *data)
 static void airplay_get_defaults(obs_data_t *s)
 {
 	obs_data_set_default_string(s, "server_name", "OBS AirPlay");
-	obs_data_set_default_int(s, "width", 0);
-	obs_data_set_default_int(s, "height", 0);
-	obs_data_set_default_int(s, "fps", 60);
-	obs_data_set_default_int(s, "max_fps", 30);
+	obs_data_set_default_string(s, "resolution", "0x0");
+	obs_data_set_default_int(s, "fps_preset", 60);
 	obs_data_set_default_bool(s, "use_random_mac", true);
 }
 
