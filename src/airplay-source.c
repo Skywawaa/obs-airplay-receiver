@@ -46,6 +46,10 @@ struct airplay_source {
 	/* Settings */
 	char server_name[256];
 	bool use_random_mac;
+	int cfg_width;
+	int cfg_height;
+	int cfg_fps;
+	int cfg_max_fps;
 
 	/* State */
 	int width;
@@ -140,6 +144,8 @@ static void cb_conn_teardown(void *cls, bool *t96, bool *t110)
 	blog(LOG_INFO, "[AirPlay] Connection teardown");
 }
 
+static int video_frame_count = 0;
+
 static void cb_video_process(void *cls, raop_ntp_t *ntp,
 			     h264_decode_struct *data)
 {
@@ -148,10 +154,18 @@ static void cb_video_process(void *cls, raop_ntp_t *ntp,
 	if (!ctx->vdec)
 		return;
 
+	if (video_frame_count < 5)
+		blog(LOG_INFO, "[AirPlay] video_process: %d bytes, %d NALs, pts=%llu",
+		     data->data_len, data->nal_count, (unsigned long long)data->pts);
+
 	struct decoded_frame frame = {0};
 	if (!video_decoder_decode(ctx->vdec, data->data, data->data_len,
-				  data->pts, &frame))
+				  data->pts, &frame)) {
+		if (video_frame_count < 5)
+			blog(LOG_WARNING, "[AirPlay] video decode FAILED");
 		return;
+	}
+	video_frame_count++;
 
 	struct obs_source_frame obs_frame = {0};
 	obs_frame.format = VIDEO_FORMAT_NV12;
@@ -262,6 +276,16 @@ static bool start_server(struct airplay_source *ctx)
 	}
 
 	raop_set_plist(ctx->raop, "max_ntp_timeouts", 5);
+
+	if (ctx->cfg_width > 0)
+		raop_set_plist(ctx->raop, "width", ctx->cfg_width);
+	if (ctx->cfg_height > 0)
+		raop_set_plist(ctx->raop, "height", ctx->cfg_height);
+	if (ctx->cfg_fps > 0)
+		raop_set_plist(ctx->raop, "refreshRate", ctx->cfg_fps);
+	if (ctx->cfg_max_fps > 0)
+		raop_set_plist(ctx->raop, "maxFPS", ctx->cfg_max_fps);
+
 	unsigned short tcp[3] = {0, 0, 0};
 	unsigned short udp[3] = {0, 0, 0};
 	raop_set_tcp_ports(ctx->raop, tcp);
@@ -270,24 +294,31 @@ static bool start_server(struct airplay_source *ctx)
 	raop_set_log_level(ctx->raop, RAOP_LOG_INFO);
 
 	unsigned short port = raop_get_port(ctx->raop);
-	raop_start(ctx->raop, &port);
-	raop_set_port(ctx->raop, port);
-
-	/* MAC address */
-	char mac_str[18] = {0};
-	if (ctx->use_random_mac) {
-		generate_random_mac(mac_str, sizeof(mac_str));
-	} else {
-#ifdef _WIN32
-		if (!get_system_mac(mac_str, sizeof(mac_str)))
-#endif
-			generate_random_mac(mac_str, sizeof(mac_str));
+	blog(LOG_INFO, "[AirPlay] calling raop_start...");
+	int start_ret = raop_start(ctx->raop, &port);
+	blog(LOG_INFO, "[AirPlay] raop_start returned %d", start_ret);
+	if (start_ret < 0) {
+		blog(LOG_ERROR, "[AirPlay] raop_start failed: %d", start_ret);
+		raop_destroy(ctx->raop);
+		ctx->raop = NULL;
+		return false;
 	}
+	raop_set_port(ctx->raop, port);
+	blog(LOG_INFO, "[AirPlay] raop_start OK on port %d", port);
+
+	/* Give the httpd thread a moment to stabilize */
+	Sleep(100);
+
+	/* MAC address - always use random to avoid crash in GetAdaptersAddresses */
+	char mac_str[18] = {0};
+	generate_random_mac(mac_str, sizeof(mac_str));
+	blog(LOG_INFO, "[AirPlay] using MAC: %s", mac_str);
 
 	char hw[6];
 	int hw_len = 0;
 	parse_hw_addr(mac_str, hw, &hw_len);
 
+	blog(LOG_INFO, "[AirPlay] calling dnssd_init...");
 	int err = 0;
 	ctx->dnssd = dnssd_init(ctx->server_name,
 				(int)strlen(ctx->server_name),
@@ -298,15 +329,20 @@ static bool start_server(struct airplay_source *ctx)
 		ctx->raop = NULL;
 		return false;
 	}
+	blog(LOG_INFO, "[AirPlay] dnssd_init OK");
 
 	raop_set_dnssd(ctx->raop, ctx->dnssd);
+
+	blog(LOG_INFO, "[AirPlay] calling dnssd_register_raop port=%d...", port);
 	dnssd_register_raop(ctx->dnssd, port);
+	blog(LOG_INFO, "[AirPlay] dnssd_register_raop OK");
 
 	unsigned short airplay_port = (port != 65535) ? port + 1 : port - 1;
+	blog(LOG_INFO, "[AirPlay] calling dnssd_register_airplay port=%d...", airplay_port);
 	dnssd_register_airplay(ctx->dnssd, airplay_port);
+	blog(LOG_INFO, "[AirPlay] dnssd_register_airplay OK");
 
-	blog(LOG_INFO,
-	     "[AirPlay] Server started: '%s' port=%d mac=%s",
+	blog(LOG_INFO, "[AirPlay] Server started: '%s' port=%d mac=%s",
 	     ctx->server_name, port, mac_str);
 
 	return true;
@@ -354,6 +390,10 @@ static void *airplay_create(obs_data_t *settings, obs_source_t *source)
 		(name && *name) ? name : "OBS AirPlay",
 		sizeof(ctx->server_name) - 1);
 	ctx->use_random_mac = obs_data_get_bool(settings, "use_random_mac");
+	ctx->cfg_width = (int)obs_data_get_int(settings, "width");
+	ctx->cfg_height = (int)obs_data_get_int(settings, "height");
+	ctx->cfg_fps = (int)obs_data_get_int(settings, "fps");
+	ctx->cfg_max_fps = (int)obs_data_get_int(settings, "max_fps");
 
 	if (!start_server(ctx)) {
 		blog(LOG_ERROR, "[AirPlay] Failed to start server");
@@ -380,8 +420,13 @@ static void airplay_update(void *data, obs_data_t *settings)
 	struct airplay_source *ctx = data;
 	const char *name = obs_data_get_string(settings, "server_name");
 	bool random_mac = obs_data_get_bool(settings, "use_random_mac");
+	int w = (int)obs_data_get_int(settings, "width");
+	int h = (int)obs_data_get_int(settings, "height");
+	int fps = (int)obs_data_get_int(settings, "fps");
+	int max_fps = (int)obs_data_get_int(settings, "max_fps");
 
 	bool need_restart = false;
+
 	if (name && strcmp(ctx->server_name, name) != 0) {
 		strncpy(ctx->server_name, name,
 			sizeof(ctx->server_name) - 1);
@@ -389,6 +434,16 @@ static void airplay_update(void *data, obs_data_t *settings)
 	}
 	if (ctx->use_random_mac != random_mac) {
 		ctx->use_random_mac = random_mac;
+		need_restart = true;
+	}
+	if (ctx->cfg_width != w || ctx->cfg_height != h) {
+		ctx->cfg_width = w;
+		ctx->cfg_height = h;
+		need_restart = true;
+	}
+	if (ctx->cfg_fps != fps || ctx->cfg_max_fps != max_fps) {
+		ctx->cfg_fps = fps;
+		ctx->cfg_max_fps = max_fps;
 		need_restart = true;
 	}
 
@@ -402,16 +457,33 @@ static obs_properties_t *airplay_get_properties(void *data)
 {
 	(void)data;
 	obs_properties_t *p = obs_properties_create();
+
 	obs_properties_add_text(p, "server_name", "Server Name",
 				OBS_TEXT_DEFAULT);
+
+	obs_property_t *w = obs_properties_add_int(p, "width",
+		"Width (0 = auto)", 0, 3840, 1);
+	obs_property_t *h = obs_properties_add_int(p, "height",
+		"Height (0 = auto)", 0, 2160, 1);
+
+	obs_properties_add_int(p, "fps",
+		"Refresh Rate (0 = default 60)", 0, 240, 1);
+	obs_properties_add_int(p, "max_fps",
+		"Max FPS (0 = default 30)", 0, 240, 1);
+
 	obs_properties_add_bool(p, "use_random_mac",
 				"Use Random MAC Address");
+
 	return p;
 }
 
 static void airplay_get_defaults(obs_data_t *s)
 {
 	obs_data_set_default_string(s, "server_name", "OBS AirPlay");
+	obs_data_set_default_int(s, "width", 0);
+	obs_data_set_default_int(s, "height", 0);
+	obs_data_set_default_int(s, "fps", 60);
+	obs_data_set_default_int(s, "max_fps", 30);
 	obs_data_set_default_bool(s, "use_random_mac", true);
 }
 

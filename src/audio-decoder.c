@@ -38,7 +38,10 @@ struct audio_decoder *audio_decoder_create(void)
 	if (!dec)
 		return NULL;
 
-	dec->codec = avcodec_find_decoder(AV_CODEC_ID_AAC);
+	/* Try libfdk_aac first (best AAC-ELD support), fall back to built-in */
+	dec->codec = avcodec_find_decoder_by_name("libfdk_aac");
+	if (!dec->codec)
+		dec->codec = avcodec_find_decoder(AV_CODEC_ID_AAC);
 	if (!dec->codec) {
 		fprintf(stderr, "[AirPlay] No AAC decoder found!\n");
 		free(dec);
@@ -51,7 +54,17 @@ struct audio_decoder *audio_decoder_create(void)
 		return NULL;
 	}
 
-	/* Default AirPlay audio config: 44100 Hz stereo */
+	/* AirPlay uses AAC-ELD 44100 Hz stereo
+	 * AudioSpecificConfig for AAC-ELD 44100 stereo: F8 E8 50 00 */
+	static const uint8_t aac_eld_config[] = {0xF8, 0xE8, 0x50, 0x00};
+	dec->ctx->extradata = av_mallocz(sizeof(aac_eld_config) +
+					 AV_INPUT_BUFFER_PADDING_SIZE);
+	if (dec->ctx->extradata) {
+		memcpy(dec->ctx->extradata, aac_eld_config,
+		       sizeof(aac_eld_config));
+		dec->ctx->extradata_size = sizeof(aac_eld_config);
+	}
+
 	dec->ctx->sample_rate = 44100;
 	av_channel_layout_default(&dec->ctx->ch_layout, 2);
 	dec->ctx->sample_fmt = AV_SAMPLE_FMT_FLTP;
