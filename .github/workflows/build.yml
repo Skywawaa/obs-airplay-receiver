@@ -323,9 +323,41 @@ jobs:
           #endif
           THEOF
 
-          # Patch byteutils.c
-          sed -i 's|#include <netinet/in.h>|#if defined(WIN32)\n#include <winsock2.h>\n#else\n#include <netinet/in.h>\n#endif|' "$UXLIB/byteutils.c"
-          sed -i 's|#include <endian.h>|#if !defined(WIN32)\n#include <endian.h>\n#endif|' "$UXLIB/byteutils.c"
+          # Patch byteutils.c - replace the entire header/endian block
+          python3 -c "
+import re
+with open('$UXLIB/byteutils.c', 'r') as f:
+    src = f.read()
+# Replace includes + htonll block
+old = re.compile(r'#include <time\.h>\n.*?#endif\n\n// The functions', re.DOTALL)
+new_code = '''#include <time.h>
+#if defined(WIN32) || defined(_WIN32)
+#include <winsock2.h>
+#ifndef htonll
+#define htonll(x) _byteswap_uint64(x)
+#endif
+#ifndef ntohll
+#define ntohll(x) _byteswap_uint64(x)
+#endif
+#else
+#include <netinet/in.h>
+#ifndef htonll
+#ifdef SYS_ENDIAN_H
+#include <sys/endian.h>
+#else
+#include <endian.h>
+#endif
+#define htonll(x) htobe64(x)
+#define ntohll(x) be64toh(x)
+#endif
+#endif
+
+// The functions'''
+src = old.sub(new_code, src)
+with open('$UXLIB/byteutils.c', 'w') as f:
+    f.write(src)
+print('Patched byteutils.c')
+"
 
           # Patch raop_rtp_mirror.c
           sed -i 's|#include <netinet/tcp.h>|#if defined(WIN32)\n#include <winsock2.h>\n#define SOL_TCP IPPROTO_TCP\n#else\n#include <netinet/tcp.h>\n#endif|' "$UXLIB/raop_rtp_mirror.c"
