@@ -21,12 +21,17 @@ if(NOT DEFINED OPENSSL_DIR)
 endif()
 
 # Find OpenSSL libcrypto
-find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto crypto
-    PATHS "${OPENSSL_DIR}/lib" "${OPENSSL_DIR}/lib/VC" "${OPENSSL_DIR}/lib/VC/x64"
+find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto crypto libcrypto-3-x64
+    PATHS
+        "${OPENSSL_DIR}/lib"
+        "${OPENSSL_DIR}/lib/VC"
+        "${OPENSSL_DIR}/lib/VC/x64"
+        "${OPENSSL_DIR}/lib/VC/x86_64"
     NO_DEFAULT_PATH)
 if(NOT OPENSSL_CRYPTO_LIB)
     find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto crypto)
 endif()
+message(STATUS "OpenSSL crypto lib: ${OPENSSL_CRYPTO_LIB}")
 
 # libplist
 set(LIBPLIST_DIR "${DEPS_DIR}/libplist-2.7.0")
