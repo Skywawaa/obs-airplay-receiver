@@ -178,15 +178,13 @@ static void cb_video_process(void *cls, raop_ntp_t *ntp,
 	video_frame_count++;
 
 	struct obs_source_frame obs_frame = {0};
-	obs_frame.format = VIDEO_FORMAT_NV12;
+	obs_frame.format = VIDEO_FORMAT_RGBA;
 	obs_frame.width = frame.width;
 	obs_frame.height = frame.height;
 	obs_frame.timestamp = data->pts * 1000;
 
 	obs_frame.data[0] = frame.data[0];
-	obs_frame.data[1] = frame.data[1];
 	obs_frame.linesize[0] = frame.linesize[0];
-	obs_frame.linesize[1] = frame.linesize[1];
 
 	obs_source_output_video(ctx->source, &obs_frame);
 

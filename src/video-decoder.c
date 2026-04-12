@@ -30,6 +30,7 @@ struct video_decoder {
 	int nv12_height;
 
 	bool initialized;
+	int log_count;
 };
 
 struct video_decoder *video_decoder_create(void)
@@ -38,14 +39,8 @@ struct video_decoder *video_decoder_create(void)
 	if (!dec)
 		return NULL;
 
-	/* Find H.264 decoder - try hardware first */
-	dec->codec = avcodec_find_decoder_by_name("h264_cuvid"); /* NVIDIA */
-	if (!dec->codec)
-		dec->codec = avcodec_find_decoder_by_name("h264_qsv"); /* Intel */
-	if (!dec->codec)
-		dec->codec = avcodec_find_decoder_by_name("h264_d3d11va"); /* D3D11 */
-	if (!dec->codec)
-		dec->codec = avcodec_find_decoder(AV_CODEC_ID_H264); /* Software fallback */
+	/* Use software H.264 decoder for maximum compatibility */
+	dec->codec = avcodec_find_decoder(AV_CODEC_ID_H264);
 
 	if (!dec->codec) {
 		fprintf(stderr, "[AirPlay] No H.264 decoder found!\n");
@@ -61,32 +56,14 @@ struct video_decoder *video_decoder_create(void)
 		return NULL;
 	}
 
-	/* Configure for low latency */
-	dec->ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
-	dec->ctx->flags2 |= AV_CODEC_FLAG2_FAST;
-	dec->ctx->thread_count = 4;
+	/* Single-threaded for lowest latency */
+	dec->ctx->thread_count = 1;
 
 	if (avcodec_open2(dec->ctx, dec->codec, NULL) < 0) {
-		fprintf(stderr, "[AirPlay] Failed to open decoder, trying software\n");
-
-		/* Fallback to software decoder */
+		fprintf(stderr, "[AirPlay] Failed to open H264 decoder\n");
 		avcodec_free_context(&dec->ctx);
-		dec->codec = avcodec_find_decoder(AV_CODEC_ID_H264);
-		if (!dec->codec) {
-			free(dec);
-			return NULL;
-		}
-
-		dec->ctx = avcodec_alloc_context3(dec->codec);
-		dec->ctx->flags |= AV_CODEC_FLAG_LOW_DELAY;
-		dec->ctx->flags2 |= AV_CODEC_FLAG2_FAST;
-		dec->ctx->thread_count = 4;
-
-		if (avcodec_open2(dec->ctx, dec->codec, NULL) < 0) {
-			avcodec_free_context(&dec->ctx);
-			free(dec);
-			return NULL;
-		}
+		free(dec);
+		return NULL;
 	}
 
 	dec->frame = av_frame_alloc();
@@ -192,9 +169,9 @@ bool video_decoder_decode(struct video_decoder *dec, const uint8_t *h264_data,
 	dec->pkt->pts = (int64_t)pts;
 	dec->pkt->dts = (int64_t)pts;
 
-	/* FFmpeg decode flow: try receive first (drain), then send, then receive.
-	 * This matches what mika314's decoder does and handles the case where
-	 * the decoder needs multiple packets before producing output. */
+	/* Match mika314's decode pattern exactly:
+	 * receive first (get previous frame), then send (feed new data).
+	 * Output is always 1 frame behind input - this is normal. */
 	int got_picture = 0;
 	int ret = avcodec_receive_frame(dec->ctx, dec->frame);
 	if (ret == 0)
@@ -207,35 +184,46 @@ bool video_decoder_decode(struct video_decoder *dec, const uint8_t *h264_data,
 	if (ret < 0 && ret != AVERROR(EAGAIN))
 		return false;
 
-	if (!got_picture) {
-		ret = avcodec_receive_frame(dec->ctx, dec->frame);
-		if (ret == 0)
-			got_picture = 1;
-	}
-
 	if (!got_picture)
 		return false;
 
-	/* Convert to NV12 if not already */
-	if (dec->frame->format == AV_PIX_FMT_NV12) {
-		/* Already NV12 - use directly */
-		out_frame->data[0] = dec->frame->data[0];
-		out_frame->data[1] = dec->frame->data[1];
-		out_frame->linesize[0] = dec->frame->linesize[0];
-		out_frame->linesize[1] = dec->frame->linesize[1];
-	} else {
-		/* Convert to NV12 */
-		if (!convert_to_nv12(dec, dec->frame))
+	if (dec->frame->width == 0 || dec->frame->height == 0)
+		return false;
+
+	/* Convert to RGBA for OBS output */
+	int w = dec->frame->width;
+	int h = dec->frame->height;
+
+	if (w != dec->nv12_width || h != dec->nv12_height || !dec->sws) {
+		if (dec->sws)
+			sws_freeContext(dec->sws);
+		if (dec->nv12_data[0])
+			av_freep(&dec->nv12_data[0]);
+
+		dec->sws = sws_getContext(w, h,
+					 (enum AVPixelFormat)dec->frame->format,
+					 w, h, AV_PIX_FMT_RGBA,
+					 SWS_FAST_BILINEAR, NULL, NULL, NULL);
+		if (!dec->sws)
 			return false;
 
-		out_frame->data[0] = dec->nv12_data[0];
-		out_frame->data[1] = dec->nv12_data[1];
-		out_frame->linesize[0] = dec->nv12_linesize[0];
-		out_frame->linesize[1] = dec->nv12_linesize[1];
+		int size = av_image_alloc(dec->nv12_data, dec->nv12_linesize,
+					  w, h, AV_PIX_FMT_RGBA, 32);
+		if (size < 0)
+			return false;
+
+		dec->nv12_width = w;
+		dec->nv12_height = h;
 	}
 
-	out_frame->width = dec->frame->width;
-	out_frame->height = dec->frame->height;
+	sws_scale(dec->sws, (const uint8_t *const *)dec->frame->data,
+		  dec->frame->linesize, 0, h, dec->nv12_data,
+		  dec->nv12_linesize);
+
+	out_frame->data[0] = dec->nv12_data[0];
+	out_frame->linesize[0] = dec->nv12_linesize[0];
+	out_frame->width = w;
+	out_frame->height = h;
 	out_frame->pts = dec->frame->pts;
 
 	return true;
