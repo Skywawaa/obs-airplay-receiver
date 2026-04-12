@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(obs-airplay-receiver VERSION 2.0.0 LANGUAGES C)
+project(obs-airplay-receiver VERSION 2.0.1 LANGUAGES C)
 
 # --- Paths ---
 set(DEPS_DIR "${CMAKE_SOURCE_DIR}/deps")

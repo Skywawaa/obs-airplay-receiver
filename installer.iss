@@ -1,12 +1,12 @@
 [Setup]
 AppName=OBS AirPlay Receiver
-AppVersion=2.0.0
+AppVersion=2.0.1
 AppPublisher=aomkoyo
 AppPublisherURL=https://github.com/aomkoyo/obs-airplay-receiver
 DefaultDirName={commonappdata}\obs-studio\plugins\obs-airplay-receiver
 DirExistsWarning=no
 OutputDir=.
-OutputBaseFilename=OBS-AirPlay-Receiver-Setup-v2.0.0
+OutputBaseFilename=OBS-AirPlay-Receiver-Setup-v2.0.1
 Compression=lzma2
 SolidCompression=yes
 PrivilegesRequired=admin
