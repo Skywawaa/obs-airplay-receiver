@@ -101,13 +101,20 @@ static bool adec_init(struct audio_dec *d, bool hw_accel)
     /* On Windows, try the Media Foundation AAC decoder first when
      * hardware acceleration is requested.  aac_mf can leverage
      * hardware decoders (Intel/AMD/NVIDIA) when available. */
+    bool hw_codec_found = false;
     if (hw_accel) {
         d->codec = avcodec_find_decoder_by_name("aac_mf");
-        if (d->codec)
-            fprintf(stdout, "[AirPlay] Using hardware AAC decoder: aac_mf\n");
+        if (d->codec) {
+            fprintf(stdout, "[AirPlay] Audio decoder: aac_mf (hardware)\n");
+            hw_codec_found = true;
+        } else {
+            fprintf(stdout,
+                    "[AirPlay] aac_mf not available, falling back to software\n");
+        }
     }
 #else
     (void)hw_accel;
+    bool hw_codec_found = false;
 #endif
 
     /* Try libfdk_aac (best AAC-ELD support), fall back to built-in */
@@ -120,7 +127,8 @@ static bool adec_init(struct audio_dec *d, bool hw_accel)
         return false;
     }
 
-    fprintf(stdout, "[AirPlay] Audio decoder: %s\n", d->codec->name);
+    if (!hw_codec_found)
+        fprintf(stdout, "[AirPlay] Audio decoder: %s (software)\n", d->codec->name);
 
     d->ctx = avcodec_alloc_context3(d->codec);
     if (!d->ctx) return false;
