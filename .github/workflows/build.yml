@@ -220,13 +220,19 @@ jobs:
           EXPORTS
               avcodec_find_decoder
               avcodec_find_decoder_by_name
+              avcodec_find_encoder
+              avcodec_find_encoder_by_name
               avcodec_alloc_context3
               avcodec_free_context
               avcodec_open2
               avcodec_send_packet
               avcodec_receive_frame
+              avcodec_send_frame
+              avcodec_receive_packet
+              avcodec_parameters_from_context
               av_packet_alloc
               av_packet_free
+              av_packet_unref
           FFDEF
 
           cat > deps/avutil.def << 'FFDEF'
@@ -234,13 +240,16 @@ jobs:
           EXPORTS
               av_frame_alloc
               av_frame_free
+              av_frame_get_buffer
               av_image_alloc
               av_freep
               av_free
               av_malloc
               av_mallocz
               av_strerror
+              av_rescale_q
               av_channel_layout_default
+              av_channel_layout_copy
               av_get_pix_fmt_string
           FFDEF
 
@@ -274,6 +283,8 @@ jobs:
               avformat_alloc_output_context2
               avio_open
               avio_closep
+              avio_alloc_context
+              avio_context_free
               avformat_free_context
               av_guess_format
               avformat_network_init
