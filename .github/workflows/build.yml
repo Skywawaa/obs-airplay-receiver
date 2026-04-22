@@ -486,6 +486,24 @@ jobs:
           cmake .. -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DOPENSSL_DIR="${{ steps.openssl.outputs.dir }}"
           nmake
 
+      - name: Download w32-pthreads.dll from OBS Studio release
+        shell: pwsh
+        run: |
+          $url = "https://github.com/obsproject/obs-studio/releases/download/32.1.1/OBS-Studio-32.1.1-Windows.zip"
+          $dest = "$env:TEMP\obs-release.zip"
+          $extractDir = "$env:TEMP\obs-release"
+          Invoke-WebRequest -Uri $url -OutFile $dest -MaximumRetryCount 3 -RetryIntervalSec 5
+          Expand-Archive -Path $dest -DestinationPath $extractDir -Force
+          $dll = Get-ChildItem -Path $extractDir -Recurse -Filter "w32-pthreads.dll" | Select-Object -First 1
+          if (-not $dll) {
+            Write-Error "w32-pthreads.dll not found in OBS release zip"
+            exit 1
+          }
+          Write-Host "Found: $($dll.FullName)"
+          New-Item -ItemType Directory -Force -Path w32-pthreads-dll | Out-Null
+          Copy-Item $dll.FullName -Destination w32-pthreads-dll\w32-pthreads.dll
+          Write-Host "Copied w32-pthreads.dll successfully"
+
       - name: Download FFmpeg shared DLLs (for standalone bundle)
         shell: pwsh
         run: |
@@ -525,10 +543,18 @@ jobs:
           mkdir -p artifact
           cp build/obs-airplay-receiver.dll artifact/
           OPENSSL_DIR="${{ steps.openssl.outputs.dir }}"
-          if [ -f "$OPENSSL_DIR/bin/libcrypto-3-x64.dll" ]; then
-            cp "$OPENSSL_DIR/bin/libcrypto-3-x64.dll" artifact/
-          elif [ -f "$OPENSSL_DIR/libcrypto-3-x64.dll" ]; then
-            cp "$OPENSSL_DIR/libcrypto-3-x64.dll" artifact/
+          found_crypto=0
+          for dll in "$OPENSSL_DIR/bin"/libcrypto-*-x64.dll "$OPENSSL_DIR"/libcrypto-*-x64.dll "$OPENSSL_DIR/bin"/libcrypto*.dll; do
+            if [ -f "$dll" ]; then
+              cp "$dll" artifact/
+              echo "Copied OpenSSL DLL: $dll"
+              found_crypto=1
+              break
+            fi
+          done
+          if [ $found_crypto -eq 0 ]; then
+            echo "ERROR: No libcrypto DLL found in $OPENSSL_DIR"
+            exit 1
           fi
           cp install.bat artifact/
           cp uninstall.bat artifact/
@@ -561,12 +587,22 @@ jobs:
           cp build-standalone/standalone/airplay-stream.exe artifact-standalone/
           # FFmpeg DLLs
           cp ffmpeg-dlls/*.dll artifact-standalone/ 2>/dev/null || true
-          # OpenSSL DLL
+          # w32-pthreads DLL
+          cp w32-pthreads-dll/w32-pthreads.dll artifact-standalone/
+          # OpenSSL DLL (handle any libcrypto-*-x64.dll version)
           OPENSSL_DIR="${{ steps.openssl.outputs.dir }}"
-          if [ -f "$OPENSSL_DIR/bin/libcrypto-3-x64.dll" ]; then
-            cp "$OPENSSL_DIR/bin/libcrypto-3-x64.dll" artifact-standalone/
-          elif [ -f "$OPENSSL_DIR/libcrypto-3-x64.dll" ]; then
-            cp "$OPENSSL_DIR/libcrypto-3-x64.dll" artifact-standalone/
+          found_crypto=0
+          for dll in "$OPENSSL_DIR/bin"/libcrypto-*-x64.dll "$OPENSSL_DIR"/libcrypto-*-x64.dll "$OPENSSL_DIR/bin"/libcrypto*.dll; do
+            if [ -f "$dll" ]; then
+              cp "$dll" artifact-standalone/
+              echo "Copied OpenSSL DLL: $dll"
+              found_crypto=1
+              break
+            fi
+          done
+          if [ $found_crypto -eq 0 ]; then
+            echo "ERROR: No libcrypto DLL found in $OPENSSL_DIR"
+            exit 1
           fi
           cp README.md artifact-standalone/
           cat > artifact-standalone/README-STANDALONE.txt << 'EOF'
@@ -581,6 +617,7 @@ jobs:
           avformat-61.dll          — FFmpeg
           swresample-5.dll         — FFmpeg
           libcrypto-3-x64.dll      — OpenSSL
+          w32-pthreads.dll         — POSIX Threads for Windows (LGPL, from OBS Studio)
 
           ADDITIONAL REQUIREMENTS (not bundled for licensing reasons)
           -----------------------------------------------------------
@@ -590,13 +627,6 @@ jobs:
                • Bonjour Print Services for Windows:
                  https://support.apple.com/kb/DL999
              Once installed, dnssd.dll will be in your system PATH.
-
-          2. w32-pthreads.dll — POSIX Threads for Windows
-             This DLL ships with OBS Studio.
-             If you have OBS installed, it is already in your system.
-             Alternatively, copy w32-pthreads.dll from your OBS installation
-             (e.g. C:\Program Files\obs-studio\bin\64bit\) next to
-             airplay-stream.exe.
 
           USAGE
           -----
