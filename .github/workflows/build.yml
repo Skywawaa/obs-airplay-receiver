@@ -6,6 +6,12 @@ on:
     tags: ['v*']
   pull_request:
     branches: [master]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version tag (e.g. v2.0.1)'
+        required: true
+        default: 'v2.0.1'
 
 jobs:
   build:
@@ -611,11 +617,20 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - name: Determine release version
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          else
+            echo "tag=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Download OBS plugin artifact
         uses: actions/download-artifact@v4
         with:
@@ -637,19 +652,20 @@ jobs:
       - name: Create release archives
         run: |
           cd obs-plugin
-          zip -r ../obs-airplay-receiver-${{ github.ref_name }}.zip .
+          zip -r ../obs-airplay-receiver-${{ steps.ver.outputs.tag }}.zip .
           cd ../standalone
-          zip -r ../airplay-stream-standalone-${{ github.ref_name }}.zip .
+          zip -r ../airplay-stream-standalone-${{ steps.ver.outputs.tag }}.zip .
           cd ..
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: "OBS AirPlay Receiver ${{ github.ref_name }}"
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: "OBS AirPlay Receiver ${{ steps.ver.outputs.tag }}"
           draft: false
           prerelease: false
           generate_release_notes: true
           files: |
-            obs-airplay-receiver-${{ github.ref_name }}.zip
+            obs-airplay-receiver-${{ steps.ver.outputs.tag }}.zip
             installer/OBS-AirPlay-Receiver-Setup-*.exe
-            airplay-stream-standalone-${{ github.ref_name }}.zip
+            airplay-stream-standalone-${{ steps.ver.outputs.tag }}.zip
