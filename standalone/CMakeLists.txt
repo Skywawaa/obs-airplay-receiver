@@ -31,6 +31,13 @@ if(NOT DEFINED LIBPLIST_DIR)
     set(LIBPLIST_DIR "${DEPS_DIR}/libplist-2.7.0")
 endif()
 
+# w32-pthreads headers: required by UxPlay headers on Windows.
+# Defaults to the path inside the OBS SDK; override with -DW32_PTHREADS_DIR=...
+# when building without the OBS SDK.
+if(NOT DEFINED W32_PTHREADS_DIR)
+    set(W32_PTHREADS_DIR "${DEPS_DIR}/obs-sdk/obs-studio-32.1.1/deps/w32-pthreads")
+endif()
+
 if(NOT DEFINED OPENSSL_DIR)
     # Default matches the root CMakeLists.txt; override via -DOPENSSL_DIR=...
     set(OPENSSL_DIR "C:/Users/kitti/scoop/apps/openssl/current")
@@ -81,7 +88,7 @@ target_include_directories(airplay-stream PRIVATE
     # OpenSSL headers
     ${OPENSSL_DIR}/include
     # w32-pthreads headers (needed by UxPlay headers on Windows)
-    ${DEPS_DIR}/obs-sdk/obs-studio-32.1.1/deps/w32-pthreads
+    ${W32_PTHREADS_DIR}
 )
 
 # ---------------------------------------------------------------

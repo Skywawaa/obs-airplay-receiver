@@ -21,6 +21,13 @@ struct airplay_stream_config {
 
     /* Requested frame rate (0 = unlimited) */
     int  fps;
+
+    /*
+     * Enable hardware-accelerated audio decode/encode via Windows
+     * Media Foundation (aac_mf).  Falls back to software if the
+     * hardware codec is unavailable.  Default: false.
+     */
+    bool hw_accel;
 };
 
 /*

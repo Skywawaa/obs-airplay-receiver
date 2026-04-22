@@ -22,10 +22,13 @@ struct ts_output;
 
 /*
  * Create a MPEG-TS TCP server that listens on the given port.
+ * If hw_accel is true, the AAC-LC encoder will attempt to use a
+ * hardware-accelerated codec (aac_mf on Windows) before falling
+ * back to the software encoder.
  * Call ts_output_destroy() to shut it down.
  * Returns NULL on failure.
  */
-struct ts_output *ts_output_create(int port);
+struct ts_output *ts_output_create(int port, bool hw_accel);
 
 /*
  * Shut down the server and free all resources.

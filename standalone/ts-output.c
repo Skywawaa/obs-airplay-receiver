@@ -102,6 +102,7 @@ static void mutex_destroy(ts_mutex_t *m){ pthread_mutex_destroy(m); }
 
 struct ts_output {
     int         port;
+    bool        hw_accel;
     ts_mutex_t  lock;
 
     /* TCP server / client */
@@ -260,7 +261,18 @@ static bool open_output(struct ts_output *out,
 
     /* ---- Audio stream (AAC-LC encoder) ---- */
     {
-        const AVCodec *aac = avcodec_find_encoder(AV_CODEC_ID_AAC);
+        const AVCodec *aac = NULL;
+
+#ifdef _WIN32
+        /* Try hardware-accelerated Windows Media Foundation encoder */
+        if (out->hw_accel) {
+            aac = avcodec_find_encoder_by_name("aac_mf");
+            if (aac)
+                fprintf(stdout, "[TS] Using hardware AAC encoder: aac_mf\n");
+        }
+#endif
+        if (!aac)
+            aac = avcodec_find_encoder(AV_CODEC_ID_AAC);
         if (!aac) {
             fprintf(stderr, "[TS] AAC encoder not found\n");
             goto fail_fmt;
@@ -369,7 +381,7 @@ static void close_output(struct ts_output *out)
 /* Public API                                                           */
 /* ------------------------------------------------------------------ */
 
-struct ts_output *ts_output_create(int port)
+struct ts_output *ts_output_create(int port, bool hw_accel)
 {
     avformat_network_init();
 
@@ -379,6 +391,7 @@ struct ts_output *ts_output_create(int port)
         return NULL;
 
     out->port        = port;
+    out->hw_accel    = hw_accel;
     out->listen_sock = INVALID_SOCK;
     out->client_sock = INVALID_SOCK;
     out->video_idx   = -1;

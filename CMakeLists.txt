@@ -5,6 +5,11 @@ project(obs-airplay-receiver VERSION 2.0.1 LANGUAGES C)
 # Pass -DBUILD_STANDALONE=ON to cmake to enable.
 option(BUILD_STANDALONE "Build the standalone airplay-stream executable" OFF)
 
+# Build the OBS plugin (obs-airplay-receiver.dll).
+# Pass -DBUILD_OBS_PLUGIN=OFF to skip the OBS plugin and build only the
+# standalone streamer.
+option(BUILD_OBS_PLUGIN "Build the OBS plugin" ON)
+
 # --- Paths ---
 set(DEPS_DIR "${CMAKE_SOURCE_DIR}/deps")
 
@@ -42,83 +47,85 @@ message(STATUS "OpenSSL crypto lib: ${OPENSSL_CRYPTO_LIB}")
 # libplist
 set(LIBPLIST_DIR "${DEPS_DIR}/libplist-2.7.0")
 
-# --- Plugin shared library ---
-add_library(obs-airplay-receiver MODULE
-    src/plugin-main.c
-    src/airplay-source.c
-    src/video-decoder.c
-    src/audio-decoder.c
-)
+# --- OBS Plugin (obs-airplay-receiver.dll) ---
+if(BUILD_OBS_PLUGIN)
+    add_library(obs-airplay-receiver MODULE
+        src/plugin-main.c
+        src/airplay-source.c
+        src/video-decoder.c
+        src/audio-decoder.c
+    )
 
-# --- Include directories ---
-target_include_directories(obs-airplay-receiver PRIVATE
-    ${CMAKE_SOURCE_DIR}/src
-    # OBS headers
-    ${OBS_SRC_DIR}/libobs
-    ${OBS_SRC_DIR}/deps/w32-pthreads
-    # UxPlay headers (raop.h, dnssd.h, stream.h, logger.h)
-    ${UXPLAY_LIB_DIR}
-    ${UXPLAY_LIB_DIR}/playfair
-    ${UXPLAY_LIB_DIR}/llhttp
-    # libplist headers
-    ${LIBPLIST_DIR}/include
-    # FFmpeg headers
-    ${FFMPEG_INCLUDE_DIR}
-    # OpenSSL headers
-    ${OPENSSL_DIR}/include
-)
+    # --- Include directories ---
+    target_include_directories(obs-airplay-receiver PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        # OBS headers
+        ${OBS_SRC_DIR}/libobs
+        ${OBS_SRC_DIR}/deps/w32-pthreads
+        # UxPlay headers (raop.h, dnssd.h, stream.h, logger.h)
+        ${UXPLAY_LIB_DIR}
+        ${UXPLAY_LIB_DIR}/playfair
+        ${UXPLAY_LIB_DIR}/llhttp
+        # libplist headers
+        ${LIBPLIST_DIR}/include
+        # FFmpeg headers
+        ${FFMPEG_INCLUDE_DIR}
+        # OpenSSL headers
+        ${OPENSSL_DIR}/include
+    )
 
-# --- Link libraries ---
-# UxPlay static libs
-target_link_libraries(obs-airplay-receiver PRIVATE
-    ${UXPLAY_BUILD_DIR}/airplay.lib
-    ${UXPLAY_BUILD_DIR}/playfair.lib
-    ${UXPLAY_BUILD_DIR}/llhttp.lib
-)
+    # --- Link libraries ---
+    # UxPlay static libs
+    target_link_libraries(obs-airplay-receiver PRIVATE
+        ${UXPLAY_BUILD_DIR}/airplay.lib
+        ${UXPLAY_BUILD_DIR}/playfair.lib
+        ${UXPLAY_BUILD_DIR}/llhttp.lib
+    )
 
-# libplist
-target_link_libraries(obs-airplay-receiver PRIVATE
-    ${LIBPLIST_DIR}/build/plist.lib
-)
+    # libplist
+    target_link_libraries(obs-airplay-receiver PRIVATE
+        ${LIBPLIST_DIR}/build/plist.lib
+    )
 
-# OBS
-target_link_libraries(obs-airplay-receiver PRIVATE ${DEPS_DIR}/obs.lib)
+    # OBS
+    target_link_libraries(obs-airplay-receiver PRIVATE ${DEPS_DIR}/obs.lib)
 
-# OpenSSL
-target_link_libraries(obs-airplay-receiver PRIVATE
-    ${OPENSSL_CRYPTO_LIB}
-)
+    # OpenSSL
+    target_link_libraries(obs-airplay-receiver PRIVATE
+        ${OPENSSL_CRYPTO_LIB}
+    )
 
-# FFmpeg
-target_link_directories(obs-airplay-receiver PRIVATE ${FFMPEG_LIB_DIR})
-target_link_libraries(obs-airplay-receiver PRIVATE
-    avcodec avutil swscale swresample
-)
+    # FFmpeg
+    target_link_directories(obs-airplay-receiver PRIVATE ${FFMPEG_LIB_DIR})
+    target_link_libraries(obs-airplay-receiver PRIVATE
+        avcodec avutil swscale swresample
+    )
 
-# Windows
-target_link_libraries(obs-airplay-receiver PRIVATE
-    ws2_32 iphlpapi
-    ${DEPS_DIR}/w32-pthreads.lib
-    ${DEPS_DIR}/dnssd.lib
-)
+    # Windows
+    target_link_libraries(obs-airplay-receiver PRIVATE
+        ws2_32 iphlpapi
+        ${DEPS_DIR}/w32-pthreads.lib
+        ${DEPS_DIR}/dnssd.lib
+    )
 
-target_compile_definitions(obs-airplay-receiver PRIVATE
-    WIN32
-    _CRT_SECURE_NO_WARNINGS
-    WIN32_LEAN_AND_MEAN
-    LIBPLIST_STATIC
-    PLUGIN_VERSION="${PROJECT_VERSION}"
-)
+    target_compile_definitions(obs-airplay-receiver PRIVATE
+        WIN32
+        _CRT_SECURE_NO_WARNINGS
+        WIN32_LEAN_AND_MEAN
+        LIBPLIST_STATIC
+        PLUGIN_VERSION="${PROJECT_VERSION}"
+    )
 
-set_target_properties(obs-airplay-receiver PROPERTIES
-    C_STANDARD 11
-    C_STANDARD_REQUIRED ON
-    PREFIX ""
-)
+    set_target_properties(obs-airplay-receiver PROPERTIES
+        C_STANDARD 11
+        C_STANDARD_REQUIRED ON
+        PREFIX ""
+    )
 
-# Install
-set(OBS_PLUGIN_DEST "$ENV{PROGRAMDATA}/obs-studio/plugins/obs-airplay-receiver/bin/64bit")
-install(TARGETS obs-airplay-receiver DESTINATION ${OBS_PLUGIN_DEST})
+    # Install
+    set(OBS_PLUGIN_DEST "$ENV{PROGRAMDATA}/obs-studio/plugins/obs-airplay-receiver/bin/64bit")
+    install(TARGETS obs-airplay-receiver DESTINATION ${OBS_PLUGIN_DEST})
+endif()
 
 # Standalone airplay-stream.exe (optional)
 if(BUILD_STANDALONE)

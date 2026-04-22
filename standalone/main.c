@@ -73,6 +73,9 @@ static void print_usage(const char *prog)
         "  --width  <px>    Requested video width  (default: device native)\n"
         "  --height <px>    Requested video height (default: device native)\n"
         "  --fps    <fps>   Requested frame rate   (default: 60)\n"
+        "  --hw-accel       Enable hardware-accelerated audio codec\n"
+        "                   (Windows: uses aac_mf via Media Foundation,\n"
+        "                    falls back to software if unavailable)\n"
         "  --help           Show this help message\n"
         "\n"
         "Open the stream in VLC:\n"
@@ -91,6 +94,7 @@ static int parse_args(int argc, char **argv,
     cfg->width       = 0;   /* device native */
     cfg->height      = 0;
     cfg->fps         = 60;
+    cfg->hw_accel    = false;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 ||
@@ -109,6 +113,8 @@ static int parse_args(int argc, char **argv,
             cfg->height = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--fps") == 0 && i + 1 < argc) {
             cfg->fps = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--hw-accel") == 0) {
+            cfg->hw_accel = true;
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             print_usage(argv[0]);
@@ -143,11 +149,13 @@ int main(int argc, char **argv)
             "Server name : %s\n"
             "Stream port : %d\n"
             "Resolution  : %s\n"
-            "FPS         : %d\n\n",
+            "FPS         : %d\n"
+            "HW accel    : %s\n\n",
             cfg.server_name,
             cfg.stream_port,
             res_str,
-            cfg.fps);
+            cfg.fps,
+            cfg.hw_accel ? "enabled (aac_mf)" : "disabled (software)");
 
     if (!airplay_stream_start(&cfg)) {
         fprintf(stderr, "Failed to start AirPlay stream server.\n");
