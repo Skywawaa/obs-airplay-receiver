@@ -228,6 +228,12 @@ static bool open_output(struct ts_output *out,
     /* Low-latency flag */
     out->fmt_ctx->flags |= AVFMT_FLAG_NOBUFFER;
 
+    /* Disable interleave-delta enforcement so that the small initial
+     * PTS offset introduced by the AAC encoder delay does not cause
+     * the muxer to drop or reorder packets (which results in a black
+     * screen and silent audio in players such as VLC/mpv). */
+    out->fmt_ctx->max_interleave_delta = 0;
+
     /* Custom AVIO context */
     out->avio_buf = (unsigned char *)av_malloc(AVIO_BUF_SIZE);
     if (!out->avio_buf) goto fail_fmt;
@@ -314,6 +320,11 @@ static bool open_output(struct ts_output *out,
 
         out->enc_channels    = channels;
         out->enc_sample_rate = sample_rate;
+
+        /* Start the audio PTS counter at -initial_padding so that the
+         * first encoded output packet (which the encoder delays by that
+         * many samples) emerges with PTS = 0, aligned with video. */
+        out->audio_pts = -(int64_t)out->aac_enc->initial_padding;
     }
 
     /* ---- Write MPEG-TS header ---- */
