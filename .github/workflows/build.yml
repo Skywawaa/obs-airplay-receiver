@@ -478,7 +478,10 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $dest -MaximumRetryCount 3 -RetryIntervalSec 5
           Expand-Archive -Path $dest -DestinationPath $extractDir -Force
           $ffmpegDir = Get-ChildItem -Path $extractDir -Directory | Where-Object { $_.Name -like 'ffmpeg-n7.1*' } | Select-Object -First 1 -ExpandProperty FullName
-          if (-not $ffmpegDir) { $ffmpegDir = $extractDir }
+          if (-not $ffmpegDir) {
+            Write-Error "Could not find expected ffmpeg-n7.1* directory in $extractDir. Available: $(Get-ChildItem $extractDir | Select-Object -ExpandProperty Name)"
+            exit 1
+          }
           Write-Host "Found FFmpeg dir: $ffmpegDir"
           New-Item -ItemType Directory -Force -Path ffmpeg-dlls | Out-Null
           foreach ($dll in @('avcodec', 'avutil', 'avformat', 'swresample')) {
