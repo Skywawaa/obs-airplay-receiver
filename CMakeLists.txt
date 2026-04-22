@@ -18,7 +18,7 @@ set(UXPLAY_BUILD_DIR "${DEPS_DIR}/uxplay-build/build")
 set(UXPLAY_LIB_DIR "${DEPS_DIR}/mika-obs-airplay/UxPlay/lib")
 
 # OBS headers
-set(OBS_SRC_DIR "${DEPS_DIR}/obs-sdk/obs-studio-32.1.1")
+set(OBS_SRC_DIR "${DEPS_DIR}/obs-sdk/obs-studio-32.1.2")
 
 # FFmpeg headers (matching OBS's FFmpeg 7.x)
 set(FFMPEG_INCLUDE_DIR "${DEPS_DIR}/ffmpeg7-include")
