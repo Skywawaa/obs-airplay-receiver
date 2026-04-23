@@ -459,27 +459,28 @@ static bool url_parse(const char *url,
                       char *path, size_t pcap)
 {
     const char *p = url;
-    *port = 7880; /* LiveKit default */
+    int scheme_default = 7880; /* LiveKit default */
 
-    if (strncmp(p, "http://", 7) == 0)       { p += 7; *port = 80; }
-    else if (strncmp(p, "https://", 8) == 0) { p += 8; *port = 443; }
+    if (strncmp(p, "http://", 7) == 0)       { p += 7; scheme_default = 80; }
+    else if (strncmp(p, "https://", 8) == 0) { p += 8; scheme_default = 443; }
 
     const char *slash = strchr(p, '/');
     const char *colon = strchr(p, ':');
 
     if (colon && (!slash || colon < slash)) {
-        /* host:port */
+        /* explicit host:port */
         size_t hlen = (size_t)(colon - p);
         if (hlen >= hcap) hlen = hcap - 1;
         memcpy(host, p, hlen);
         host[hlen] = '\0';
         *port = atoi(colon + 1);
     } else {
-        /* host only */
+        /* host only — fall back to scheme-based default */
         size_t hlen = slash ? (size_t)(slash - p) : strlen(p);
         if (hlen >= hcap) hlen = hcap - 1;
         memcpy(host, p, hlen);
         host[hlen] = '\0';
+        *port = scheme_default;
     }
 
     if (slash) {
