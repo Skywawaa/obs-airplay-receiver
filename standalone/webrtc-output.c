@@ -319,9 +319,19 @@ struct webrtc_output {
 };
 
 /* ------------------------------------------------------------------ */
-/* SDP helper: find RTP payload type for a named codec                 */
+/* SDP helpers                                                          */
 /* ------------------------------------------------------------------ */
 
+/* Advance past the current line (handles \r\n and bare \n). */
+static const char *sdp_next_line(const char *p)
+{
+    const char *nl = strpbrk(p, "\r\n");
+    if (!nl) return p + strlen(p);
+    if (nl[0] == '\r' && nl[1] == '\n') return nl + 2;
+    return nl + 1;
+}
+
+/* Find RTP payload type for a named codec in the SDP. */
 static int sdp_find_pt(const char *sdp, const char *codec)
 {
     for (const char *p = sdp; *p; ) {
@@ -342,6 +352,92 @@ static int sdp_find_pt(const char *sdp, const char *codec)
         p = num; /* advance past this line */
     }
     return -1;
+}
+
+/*
+ * Find the byte offset of the first "m=<media_type> " line in sdp.
+ * Returns (size_t)-1 if not found.
+ */
+static size_t sdp_media_pos(const char *sdp, const char *media_type)
+{
+    size_t mlen = strlen(media_type);
+    for (const char *p = sdp; *p; p = sdp_next_line(p)) {
+        if (strncmp(p, "m=", 2) == 0) {
+            const char *mline = p + 2;
+            if (strncmp(mline, media_type, mlen) == 0 &&
+                (mline[mlen] == ' ' || mline[mlen] == '\r' ||
+                 mline[mlen] == '\n'))
+                return (size_t)(p - sdp);
+        }
+    }
+    return (size_t)-1;
+}
+
+/*
+ * Return true if every character of mid is safe for use in an SDP
+ * attribute value (alphanumeric, hyphen, or underscore).  Rejects
+ * empty strings, spaces, control characters, and any other byte that
+ * could be used to inject extra SDP lines.
+ */
+static bool sdp_mid_is_safe(const char *mid)
+{
+    if (!mid || *mid == '\0') return false;
+    for (const char *c = mid; *c; c++) {
+        if (!((*c >= 'A' && *c <= 'Z') ||
+              (*c >= 'a' && *c <= 'z') ||
+              (*c >= '0' && *c <= '9') ||
+               *c == '-' || *c == '_'))
+            return false;
+    }
+    return true;
+}
+
+/*
+ * Extract the a=mid: value for the first m=<media_type> section.
+ * Writes the mid string (without trailing whitespace) into mid_out.
+ * If no a=mid: line is found, or the extracted value contains characters
+ * outside [A-Za-z0-9_-], mid_out is set to media_type as a safe fallback.
+ */
+static void sdp_find_mid_for_media(const char *sdp, const char *media_type,
+                                    char *mid_out, size_t mid_cap)
+{
+    /* Default fallback */
+    strncpy(mid_out, media_type, mid_cap - 1);
+    mid_out[mid_cap - 1] = '\0';
+
+    size_t mlen = strlen(media_type);
+    bool   in_section = false;
+
+    for (const char *p = sdp; *p; p = sdp_next_line(p)) {
+        if (strncmp(p, "m=", 2) == 0) {
+            const char *mline = p + 2;
+            if (strncmp(mline, media_type, mlen) == 0 &&
+                (mline[mlen] == ' ' || mline[mlen] == '\r' ||
+                 mline[mlen] == '\n')) {
+                in_section = true;
+            } else {
+                /* Entering a different media section: stop searching */
+                if (in_section) break;
+            }
+            continue;
+        }
+        if (!in_section) continue;
+        if (strncmp(p, "a=mid:", 6) == 0) {
+            const char *mid_start = p + 6;
+            const char *mid_end   = strpbrk(mid_start, "\r\n");
+            size_t mid_len = mid_end ? (size_t)(mid_end - mid_start)
+                                     : strlen(mid_start);
+            if (mid_len >= mid_cap) mid_len = mid_cap - 1;
+            memcpy(mid_out, mid_start, mid_len);
+            mid_out[mid_len] = '\0';
+            /* If the value is not safe to embed in SDP, keep the fallback */
+            if (!sdp_mid_is_safe(mid_out)) {
+                strncpy(mid_out, media_type, mid_cap - 1);
+                mid_out[mid_cap - 1] = '\0';
+            }
+            return;
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */
@@ -550,26 +646,52 @@ static bool handle_offer(struct webrtc_output *out,
     rtcSetStateChangeCallback(pc, on_pc_state);
     rtcSetGatheringStateChangeCallback(pc, on_gathering_state);
 
-    /* Build SDP media section strings using the PT we extracted.
+    /* Extract the a=mid: values that the browser used in its offer.
+     * Modern browsers assign numeric mids (e.g. "0", "1") and WebRTC
+     * requires the answer's m-lines to have exactly the same mid values
+     * and appear in the same order as the offer's m-lines.
+     * If no a=mid: is present in the offer we fall back to "video"/"audio". */
+    char video_mid[64], audio_mid[64];
+    sdp_find_mid_for_media(offer_sdp, "video", video_mid, sizeof(video_mid));
+    sdp_find_mid_for_media(offer_sdp, "audio", audio_mid, sizeof(audio_mid));
+
+    /* Determine which media type appears first in the offer so we can add
+     * tracks in the matching order.  libdatachannel generates the answer
+     * m-lines in the order tracks were added, so they must mirror the offer.
+     * sdp_media_pos returns (size_t)-1 when a type is absent; treat absence
+     * as "comes after anything present" (i.e. infinite position). */
+    size_t video_pos = sdp_media_pos(offer_sdp, "video");
+    size_t audio_pos = sdp_media_pos(offer_sdp, "audio");
+    bool video_first;
+    if (video_pos == (size_t)-1 && audio_pos == (size_t)-1)
+        video_first = true;  /* no ordering info -- use default */
+    else if (video_pos == (size_t)-1)
+        video_first = false; /* only audio found */
+    else if (audio_pos == (size_t)-1)
+        video_first = true;  /* only video found */
+    else
+        video_first = (video_pos < audio_pos);
+
+    /* Build SDP media section strings using the PT and mid we extracted.
      * Buffers are 512 bytes; the largest possible string is well under 256. */
     char vdesc[512], adesc[512];
     int vdesc_len = snprintf(vdesc, sizeof(vdesc),
         "video 9 UDP/TLS/RTP/SAVPF %d\r\n"
-        "a=mid:video\r\n"
+        "a=mid:%s\r\n"
         "a=rtpmap:%d H264/90000\r\n"
         "a=fmtp:%d level-asymmetry-allowed=1;packetization-mode=1;"
             "profile-level-id=42e01f\r\n"
         "a=sendonly\r\n"
         "a=ssrc:%u cname:airplay\r\n",
-        h264_pt, h264_pt, h264_pt, out->video_ssrc);
+        h264_pt, video_mid, h264_pt, h264_pt, out->video_ssrc);
     int adesc_len = snprintf(adesc, sizeof(adesc),
         "audio 9 UDP/TLS/RTP/SAVPF %d\r\n"
-        "a=mid:audio\r\n"
+        "a=mid:%s\r\n"
         "a=rtpmap:%d opus/48000/2\r\n"
         "a=fmtp:%d minptime=10;useinbandfec=1\r\n"
         "a=sendonly\r\n"
         "a=ssrc:%u cname:airplay\r\n",
-        opus_pt, opus_pt, opus_pt, out->audio_ssrc);
+        opus_pt, audio_mid, opus_pt, opus_pt, out->audio_ssrc);
     if (vdesc_len <= 0 || vdesc_len >= (int)sizeof(vdesc) ||
         adesc_len <= 0 || adesc_len >= (int)sizeof(adesc)) {
         fprintf(stderr, "[WebRTC] SDP media description too long\n");
@@ -577,8 +699,15 @@ static bool handle_offer(struct webrtc_output *out,
         return false;
     }
 
-    int vtr = rtcAddTrack(pc, vdesc);
-    int atr = rtcAddTrack(pc, adesc);
+    /* Add tracks in the same order the m-lines appear in the offer */
+    int vtr, atr;
+    if (video_first) {
+        vtr = rtcAddTrack(pc, vdesc);
+        atr = rtcAddTrack(pc, adesc);
+    } else {
+        atr = rtcAddTrack(pc, adesc);
+        vtr = rtcAddTrack(pc, vdesc);
+    }
     if (vtr < 0 || atr < 0) {
         fprintf(stderr, "[WebRTC] rtcAddTrack failed (video=%d audio=%d)\n",
                 vtr, atr);
