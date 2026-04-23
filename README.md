@@ -4,7 +4,7 @@
 [![License: LGPL v2.1](https://img.shields.io/badge/License-LGPL_v2.1-blue.svg)](LICENSE)
 [![Release](https://img.shields.io/github/v/release/aomkoyo/obs-airplay-receiver)](https://github.com/aomkoyo/obs-airplay-receiver/releases)
 
-**`airplay-stream.exe`** — a standalone Windows command-line tool that receives AirPlay screen mirroring from any Apple device and re-streams it as MPEG-TS over TCP so you can open it directly in **VLC**, mpv, ffplay, or any compatible media player.
+**`airplay-stream.exe`** — a standalone Windows command-line tool that receives AirPlay screen mirroring from any Apple device and streams it to any browser at **< 100 ms latency** via a LiveKit SFU.
 
 > **Built entirely with [Claude Code](https://claude.ai/code)** (Anthropic's AI coding agent). This project is a Windows port of [mika314/obs-airplay](https://github.com/mika314/obs-airplay), using [UxPlay](https://github.com/FDH2/UxPlay)'s battle-tested AirPlay 2 protocol library.
 
@@ -13,12 +13,23 @@
 ## How it works
 
 ```
-iPhone/iPad/Mac  ──(AirPlay)──►  airplay-stream.exe  ──(TCP MPEG-TS)──►  VLC / mpv / ffplay
+iPhone/iPad/Mac  ──(AirPlay)──►  airplay-stream.exe
+                                        │
+                               H.264 + Opus (WHIP)
+                                        │
+                               ┌────────▼─────────┐
+                               │  LiveKit Server   │  (Docker / local)
+                               └────────┬─────────┘
+                                        │  WebRTC subscribe
+                               ┌────────▼─────────┐
+                               │  Browser (JS SDK) │
+                               └──────────────────┘
 ```
 
-- **Video**: H.264 frames are passed directly into the MPEG-TS container — no decode/re-encode, minimal CPU, no quality loss.
-- **Audio**: AAC-ELD audio is decoded and re-encoded as AAC-LC for maximum player compatibility.
-- **Hardware acceleration**: Pass `--hw-accel` to use Windows Media Foundation (`aac_mf`) for audio decode/encode, offloading processing to Intel/AMD/NVIDIA hardware when available.
+- **Video**: H.264 frames are passed directly into RTP — no decode/re-encode, minimal CPU, no quality loss.
+- **Audio**: AAC-ELD audio is decoded, resampled to 48 kHz, and encoded to Opus for WebRTC delivery.
+- **SFU reconnection**: The LiveKit JS SDK handles reconnection automatically — no page reload needed when the publisher restarts.
+- **Hardware acceleration**: Pass `--hw-accel` to use Windows Media Foundation (`aac_mf`) for audio decode/encode.
 
 ## Requirements
 
@@ -30,12 +41,37 @@ iPhone/iPad/Mac  ──(AirPlay)──►  airplay-stream.exe  ──(TCP MPEG-T
   - OpenSSL 4.x: [Win64OpenSSL_Light-3_6_2.msi](https://slproweb.com/download/Win64OpenSSL_Light-3_6_2.msi)
 
   After installation, copy the matching `libcrypto-*-x64.dll` from the OpenSSL `bin\` folder next to `airplay-stream.exe`.
+- **LiveKit server** — self-hosted via Docker (see [Quick Start](#quick-start) below).
+
+## Quick Start
+
+### 1. Start LiveKit
+
+```bat
+docker run --rm ^
+  -p 7880:7880 -p 7881:7881 ^
+  -p 50000-60000:50000-60000/udp ^
+  livekit/livekit-server --dev
+```
+
+The `--dev` flag uses a stable key/secret pair: `APIKey=devkey` / `APISecret=secret` — perfect for local use.
+
+### 2. Run airplay-stream
+
+```bat
+airplay-stream.exe --name "My Stream" --port 8888
+```
+
+### 3. Open in browser
+
+Navigate to `http://localhost:8888/` — the LiveKit JS SDK player loads automatically.
 
 ## Installation
 
 1. Download the latest release `.zip` from the [Releases](../../releases) page
 2. Extract the zip to any folder
-3. Run `airplay-stream.exe` from the extracted folder
+3. Start a LiveKit server (see Quick Start above)
+4. Run `airplay-stream.exe` from the extracted folder
 
 ## Usage
 
@@ -46,27 +82,31 @@ airplay-stream.exe [options]
 | Option | Default | Description |
 |---|---|---|
 | `--name <name>` | `AirPlay Stream` | Server name shown on Apple device |
-| `--port <port>` | `8888` | TCP port for the MPEG-TS stream |
-| `--webrtc-port <port>` | disabled | HTTP port for the built-in WebRTC player (< 100 ms latency) |
+| `--port <port>` | `8888` | HTTP port for the browser WebRTC player |
+| `--livekit-url <url>` | `http://localhost:7880` | LiveKit server URL |
+| `--api-key <key>` | `devkey` | LiveKit API key |
+| `--api-secret <secret>` | `secret` | LiveKit API secret |
 | `--width <px>` | device native | Requested video width |
 | `--height <px>` | device native | Requested video height |
 | `--fps <fps>` | `60` | Requested frame rate |
 | `--hw-accel` | off | Enable hardware audio codec (Windows Media Foundation) |
 | `--help` | | Show help and exit |
 
-**Example:**
+**Default (local LiveKit with dev credentials):**
 
 ```bat
 airplay-stream.exe --name "My Stream" --port 8888
 ```
 
-With the WebRTC browser player (< 100 ms latency):
+Then open `http://localhost:8888/` in any browser — no plugin required.
+
+**Remote LiveKit server:**
 
 ```bat
-airplay-stream.exe --name "My Stream" --webrtc-port 3020
+airplay-stream.exe --name "My Stream" --port 8888 ^
+    --livekit-url http://192.168.1.100:7880 ^
+    --api-key mykey --api-secret mysecret
 ```
-
-Then open `http://localhost:3020/` in any browser — no plugin required.
 
 With hardware acceleration:
 
@@ -74,19 +114,15 @@ With hardware acceleration:
 airplay-stream.exe --name "My Stream" --port 8888 --hw-accel
 ```
 
-Then open in VLC:
-- Command line: `vlc tcp://localhost:8888`
-- GUI: **Media → Open Network Stream** → `tcp://localhost:8888`
-
-Or with FFplay: `ffplay tcp://localhost:8888`
-
 ## Firewall
 
 Allow the following through Windows Firewall:
 - **TCP port 7000** (AirPlay)
-- **TCP port `<stream-port>`** (MPEG-TS output, default 8888)
-- **TCP port `<webrtc-port>`** (WebRTC HTTP signalling, when `--webrtc-port` is used)
+- **TCP port `<port>`** (WebRTC viewer HTTP server, default 8888)
+- **TCP port 7880** (LiveKit HTTP/WHIP — needed when LiveKit is remote)
+- **TCP port 7881** (LiveKit WebSocket — needed when LiveKit is remote)
 - **UDP port 5353** (mDNS/Bonjour)
+- **UDP ports 50000–60000** (LiveKit media — needed when LiveKit is remote)
 
 ## Hardware Acceleration
 
@@ -164,18 +200,21 @@ All commands below should be run from a **VS Developer Command Prompt**.
 ## Troubleshooting
 
 - **Device doesn't see the receiver** — Check that Bonjour is installed and Windows Firewall allows TCP 7000 and UDP 5353
-- **No audio** — VLC sometimes needs a moment to buffer; try pausing and unpausing
-- **VLC can't connect** — Check that Windows Firewall allows the stream port (default TCP 8888); try `telnet localhost 8888`
-- **One client at a time** — AirPlay screen mirroring supports a single connected device
+- **Browser shows "Connecting…" forever** — Check that the LiveKit server is running (`docker ps`) and that port 7880 is reachable from the machine
+- **"WHIP publish failed"** — LiveKit is not running or the URL / credentials are wrong; verify with `curl http://localhost:7880/` which should return a JSON health response
+- **Video freezes after reconnect** — Normal; the publisher automatically reconnects within ~5 s; the browser SDK reconnects within ~2 s
 - **`--hw-accel` has no effect** — Your system may not have a supported hardware codec; the tool automatically falls back to software processing
+- **One AirPlay client at a time** — AirPlay screen mirroring supports a single connected device
 
 ## Credits
 
 - [UxPlay](https://github.com/FDH2/UxPlay) — Open-source AirPlay 2 server (core protocol: FairPlay, pairing, encryption)
 - [mika314/obs-airplay](https://github.com/mika314/obs-airplay) — Original OBS AirPlay plugin for Linux (inspiration and reference)
-- [FFmpeg](https://ffmpeg.org/) — H.264 and AAC-ELD decoding, AAC-LC encoding
+- [LiveKit](https://livekit.io) — Self-hosted WebRTC SFU with WHIP publish and battle-tested SDK reconnection
+- [FFmpeg](https://ffmpeg.org/) — H.264 and AAC-ELD decoding, Opus encoding
+- [libdatachannel](https://github.com/paullouisageneau/libdatachannel) — ICE / DTLS / SRTP transport
 - [libplist](https://github.com/libimobiledevice/libplist) — Apple binary plist format
-- [OpenSSL](https://www.openssl.org/) — Cryptography (AES, SHA, Ed25519)
+- [OpenSSL](https://www.openssl.org/) — Cryptography (AES, SHA, HMAC-SHA256 for JWT signing)
 
 ## Contributing
 

@@ -364,8 +364,17 @@ bool airplay_stream_start(const struct airplay_stream_config *cfg)
         return false;
     }
 
-    /* Create WebRTC output */
-    ctx->webrtc = webrtc_output_create(cfg->webrtc_port);
+    /* Create WebRTC/LiveKit output */
+    ctx->webrtc = webrtc_output_create(cfg->webrtc_port,
+                                       cfg->livekit_url[0]
+                                           ? cfg->livekit_url
+                                           : NULL,
+                                       cfg->livekit_api_key[0]
+                                           ? cfg->livekit_api_key
+                                           : NULL,
+                                       cfg->livekit_api_secret[0]
+                                           ? cfg->livekit_api_secret
+                                           : NULL);
     if (!ctx->webrtc) {
         fprintf(stderr, "[AirPlay] Failed to start WebRTC server on port %d\n",
                 cfg->webrtc_port);

@@ -2,20 +2,22 @@
 
 /*
  * webrtc-output.h
- * WebRTC output server for ultra-low-latency (< 100 ms) browser playback.
+ * LiveKit WHIP publisher for ultra-low-latency (< 100 ms) browser playback.
  *
- * Opens a minimal HTTP signalling endpoint on the configured port.
- * Browsers connect by navigating to http://localhost:<port>/ which serves
- * a self-contained WebRTC player page.  The page exchanges SDP via a
- * WHEP-style POST /offer endpoint.
+ * The C application publishes H.264 + Opus to a LiveKit SFU once via WHIP.
+ * Browsers connect to the SFU using the LiveKit JS SDK (served from the
+ * built-in HTTP server on http_port).  The SDK handles all reconnections
+ * automatically -- no page reload needed.
  *
- * Video : H.264 Annex-B NAL units are packetised into RTP per RFC 6184
- *         and sent directly over WebRTC without decode/re-encode.
+ * GET http://localhost:<http_port>/        -- LiveKit JS SDK player page
+ * GET http://localhost:<http_port>/token   -- subscriber JWT (JSON)
+ *
+ * Video : H.264 Annex-B NAL units are packetised into RTP per RFC 6184.
  * Audio : float32 interleaved PCM is resampled to 48 kHz, encoded to
  *         Opus (libopus / FFmpeg native), and packetised per RFC 7587.
  *
- * Requires libdatachannel (https://github.com/paullouisageneau/libdatachannel)
- * for ICE / DTLS / SRTP transport, and FFmpeg for Opus encoding + SWR.
+ * Requires libdatachannel >= 0.17, FFmpeg (Opus + SWR), OpenSSL >= 1.1,
+ * and a running LiveKit server (https://livekit.io).
  */
 
 #include <stdbool.h>
@@ -25,12 +27,22 @@
 struct webrtc_output;
 
 /*
- * Create a WebRTC output server that listens for HTTP signalling on
- * http_port (e.g. 8889).  Navigate to http://localhost:<http_port>/ in a
- * browser to open the built-in player.
+ * Create a WebRTC/LiveKit output that:
+ *   - Publishes a sendonly WHIP stream to livekit_url (e.g.
+ *     "http://localhost:7880") using api_key / api_secret for JWT auth.
+ *   - Serves the LiveKit JS SDK viewer at http://localhost:<http_port>/.
+ *   - Auto-reconnects to LiveKit on any failure; browser viewers are
+ *     never interrupted.
+ *
+ * Pass NULL for livekit_url / api_key / api_secret to use the LiveKit
+ * --dev defaults ("http://localhost:7880" / "devkey" / "secret").
+ *
  * Returns NULL on failure.
  */
-struct webrtc_output *webrtc_output_create(int http_port);
+struct webrtc_output *webrtc_output_create(int         http_port,
+                                           const char *livekit_url,
+                                           const char *api_key,
+                                           const char *api_secret);
 
 /*
  * Shut down the server and free all resources.
@@ -43,7 +55,7 @@ void webrtc_output_destroy(struct webrtc_output *out);
  *   size   : byte count
  *   pts_us : presentation timestamp in microseconds
  *
- * Silently dropped when no WebRTC peer is connected.
+ * Silently dropped when no connection to the LiveKit SFU is active.
  */
 void webrtc_output_write_video(struct webrtc_output *out,
                                const uint8_t *data, size_t size,
