@@ -255,10 +255,13 @@ static void cb_conn_destroy(void *cls)
 
 static void cb_conn_reset(void *cls, int timeouts, bool reset_video)
 {
-    struct airplay_ctx *ctx = (struct airplay_ctx *)cls;
+    (void)cls;
     fprintf(stderr, "[AirPlay] Connection reset (timeouts=%d reset=%d)\n",
             timeouts, reset_video);
-    raop_stop(ctx->raop);
+    /* Do NOT call raop_stop() here.  Stopping the RAOP listener would prevent
+     * the AirPlay device from reconnecting automatically and would require the
+     * user to restart the program.  UxPlay handles the session reset internally;
+     * the device will re-establish the AirPlay connection on its own. */
 }
 
 static void cb_conn_teardown(void *cls, bool *t96, bool *t110)

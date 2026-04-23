@@ -575,9 +575,17 @@ static void rtp_send_h264(struct webrtc_output *out,
 
 static void on_gathering_state(int pc, rtcGatheringState state, void *ptr)
 {
-    (void)pc;
-    if (state == RTC_GATHERING_COMPLETE)
-        event_signal(((struct webrtc_output *)ptr)->gather_evt);
+    struct webrtc_output *out = (struct webrtc_output *)ptr;
+    if (state != RTC_GATHERING_COMPLETE)
+        return;
+    /* Only signal for the current peer connection.  A delayed callback from
+     * a previous (already deleted) PC must not unblock the new connection's
+     * ICE gathering wait, which would return an incomplete SDP answer. */
+    mutex_lock(&out->lock);
+    bool current = (out->pc == pc);
+    mutex_unlock(&out->lock);
+    if (current)
+        event_signal(out->gather_evt);
 }
 
 static void on_pc_state(int pc, rtcState state, void *ptr)
