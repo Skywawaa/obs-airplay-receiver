@@ -133,6 +133,10 @@ struct ts_output {
     /* PTS normalisation: subtract first observed video PTS */
     int64_t pts_base;
     bool    pts_base_set;
+
+    /* After a new client connects, hold video until the first IDR
+     * (keyframe) arrives — players cannot decode without an IDR. */
+    bool    waiting_for_keyframe;
 };
 
 /* ------------------------------------------------------------------ */
@@ -333,6 +337,10 @@ static bool open_output(struct ts_output *out,
         goto fail_aac;
     }
 
+    /* Hold all video output until the first IDR (keyframe) is received.
+     * Players such as VLC cannot start H.264 decoding mid-stream. */
+    out->waiting_for_keyframe = true;
+
     return true;
 
 fail_aac:
@@ -383,9 +391,11 @@ static void close_output(struct ts_output *out)
     }
 
     /* Reset audio accumulation and PTS normalisation */
-    out->audio_buf_n    = 0;
-    out->audio_pts      = 0;
-    out->pts_base_set   = false;
+    out->audio_buf_n  = 0;
+    out->audio_pts    = 0;
+    out->pts_base_set = false;
+    /* waiting_for_keyframe is re-armed by open_output on the next
+     * connection; it must NOT be cleared here. */
 }
 
 /* ------------------------------------------------------------------ */
@@ -506,13 +516,26 @@ void ts_output_write_video(struct ts_output *out,
         AVPacket *pkt = av_packet_alloc();
         if (!pkt) goto done;
 
+        bool is_key = h264_is_keyframe(data, size);
+
+        /* Skip non-IDR frames until we see the first keyframe after a
+         * new client connects.  Without this, players such as VLC
+         * receive undecipherable P-frames first and display nothing. */
+        if (out->waiting_for_keyframe) {
+            if (!is_key) {
+                av_packet_free(&pkt);
+                goto done;
+            }
+            out->waiting_for_keyframe = false;
+        }
+
         /* Wrap data without copy */
         pkt->data         = (uint8_t *)data;
         pkt->size         = (int)size;
         pkt->stream_index = out->video_idx;
         pkt->pts          = norm_pts;
         pkt->dts          = norm_pts;
-        if (h264_is_keyframe(data, size))
+        if (is_key)
             pkt->flags |= AV_PKT_FLAG_KEY;
 
         int ret = av_interleaved_write_frame(out->fmt_ctx, pkt);
