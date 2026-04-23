@@ -260,6 +260,69 @@ static bool http_get_rtp_params(int port, int *video_port, int *audio_port)
     return true;
 }
 
+/*
+ * Poll GET /keyframe-needed on the mediasoup HTTP server.
+ * Returns true if the server reports that a new browser consumer has
+ * connected and needs the cached IDR frame injected into the RTP stream.
+ * Returns false on any error or when no keyframe is needed.
+ */
+static bool http_get_keyframe_needed(int port)
+{
+    sock_t s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s == INVALID_SOCK) return false;
+
+#ifdef _WIN32
+    DWORD tv_ms = 2000;
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv_ms, sizeof(tv_ms));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv_ms, sizeof(tv_ms));
+#else
+    struct timeval tv = {2, 0};
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family      = AF_INET;
+    addr.sin_port        = htons((unsigned short)port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+
+    if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        sock_close(s);
+        return false;
+    }
+
+    const char *req =
+        "GET /keyframe-needed HTTP/1.0\r\n"
+        "Host: 127.0.0.1\r\n"
+        "Connection: close\r\n"
+        "\r\n";
+    if (send(s, req, (int)strlen(req), 0) < 0) {
+        sock_close(s);
+        return false;
+    }
+
+    char buf[512];
+    int  total = 0, r;
+    while (total < (int)(sizeof(buf) - 1) &&
+           (r = (int)recv(s, buf + total,
+                          sizeof(buf) - 1 - (size_t)total, 0)) > 0)
+        total += r;
+    sock_close(s);
+
+    if (total <= 0) return false;
+    buf[total] = '\0';
+
+    /* Skip HTTP headers */
+    char *body = strstr(buf, "\r\n\r\n");
+    if (!body) return false;
+    body += 4;
+
+    /* Accept both compact and spaced JSON: "needed":true / "needed": true */
+    return strstr(body, "\"needed\":true")   != NULL ||
+           strstr(body, "\"needed\": true")  != NULL;
+}
+
 /* ------------------------------------------------------------------ */
 /* RTP header builder                                                   */
 /* ------------------------------------------------------------------ */
@@ -546,7 +609,12 @@ shift:
 
 /*
  * Polls the mediasoup server for its RTP port allocation, then creates
- * and connects UDP sockets.  Exits once connected or the output is stopped.
+ * and connects UDP sockets.  After connecting, continues to run and polls
+ * /keyframe-needed every second.  When the server signals that a new
+ * browser consumer has connected, sets needs_keyframe so the cached IDR
+ * is injected into the RTP stream before the next P-frame, allowing the
+ * new consumer's H.264 decoder to sync without waiting for the next
+ * natural keyframe from the AirPlay device.
  */
 static void connect_thread(void *arg)
 {
@@ -615,7 +683,20 @@ static void connect_thread(void *arg)
                 "[WebRTC] Connected to mediasoup — video UDP port %d,"
                 " audio UDP port %d\n",
                 vport, aport);
-        return; /* done */
+        break; /* proceed to keyframe poll loop */
+    }
+
+    /* Poll /keyframe-needed once per second for the lifetime of the output.
+     * When a new browser consumer connects, the server sets this flag so we
+     * can inject the cached IDR frame before the next P-frame. */
+    while (out->running) {
+        SLEEP_MS(1000);
+        if (http_get_keyframe_needed(out->mediasoup_port)) {
+            mutex_lock(&out->lock);
+            if (out->ready)
+                out->needs_keyframe = true;
+            mutex_unlock(&out->lock);
+        }
     }
 }
 

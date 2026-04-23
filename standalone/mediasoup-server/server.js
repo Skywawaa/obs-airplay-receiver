@@ -79,6 +79,15 @@ let audioPlainTransport;
 let videoProducer;
 let audioProducer;
 
+/**
+ * Set to true when a new browser consumer is created.
+ * Polled by airplay-stream.exe via GET /keyframe-needed so it can inject
+ * the cached IDR frame into the RTP stream, allowing the new consumer's
+ * H.264 decoder to sync immediately without waiting for the next natural
+ * keyframe from the AirPlay device.
+ */
+let keyframeNeeded = false;
+
 /* ------------------------------------------------------------------ */
 /* mediasoup initialisation                                             */
 /* ------------------------------------------------------------------ */
@@ -240,6 +249,13 @@ function handleBrowserSocket(ws) {
                             paused          : false,
                         });
 
+                        if (consumer.kind === 'video') {
+                            /* Signal airplay-stream.exe to inject the cached IDR
+                             * so the new consumer's H.264 decoder can sync without
+                             * waiting for the next natural keyframe from the device. */
+                            keyframeNeeded = true;
+                        }
+
                         consumers.push({
                             id            : consumer.id,
                             producerId    : producer.id,
@@ -291,6 +307,15 @@ async function startServer() {
             videoPort : videoPlainTransport.tuple.localPort,
             audioPort : audioPlainTransport.tuple.localPort,
         });
+    });
+
+    /* Keyframe-needed endpoint — polled by airplay-stream.exe every second.
+     * Returns true (and resets the flag) when a new browser consumer has
+     * connected and needs the cached IDR frame injected into the RTP stream. */
+    app.get('/keyframe-needed', (_req, res) => {
+        const needed = keyframeNeeded;
+        keyframeNeeded = false;
+        res.json({ needed });
     });
 
     /* WebSocket server for browser signalling */
