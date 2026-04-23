@@ -25,6 +25,12 @@ iPhone/iPad/Mac  ──(AirPlay)──►  airplay-stream.exe  ──(TCP MPEG-T
 - **Windows 10/11 64-bit**
 - **Apple Bonjour** — Required for mDNS discovery so Apple devices can find the receiver.
   Install [iTunes](https://www.apple.com/itunes/) or the [Bonjour Print Services](https://support.apple.com/kb/DL999) package.
+- **OpenSSL** — `libcrypto-3-x64.dll` (OpenSSL 3.x) or `libcrypto-4-x64.dll` (OpenSSL 4.x) must be present next to `airplay-stream.exe`.
+  The easiest way to get it is the free **OpenSSL Light** installer:
+  - OpenSSL 4.x: [Win64OpenSSL_Light-4_0_0.msi](https://slproweb.com/download/Win64OpenSSL_Light-4_0_0.msi)
+  - OpenSSL 3.x: [slproweb.com/products/Win32OpenSSL.html](https://slproweb.com/products/Win32OpenSSL.html)
+
+  After installation, copy the matching `libcrypto-*-x64.dll` from the OpenSSL `bin\` folder next to `airplay-stream.exe`.
 
 ## Installation
 
@@ -42,6 +48,7 @@ airplay-stream.exe [options]
 |---|---|---|
 | `--name <name>` | `AirPlay Stream` | Server name shown on Apple device |
 | `--port <port>` | `8888` | TCP port for the MPEG-TS stream |
+| `--webrtc-port <port>` | disabled | HTTP port for the built-in WebRTC player (< 100 ms latency) |
 | `--width <px>` | device native | Requested video width |
 | `--height <px>` | device native | Requested video height |
 | `--fps <fps>` | `60` | Requested frame rate |
@@ -53,6 +60,14 @@ airplay-stream.exe [options]
 ```bat
 airplay-stream.exe --name "My Stream" --port 8888
 ```
+
+With the WebRTC browser player (< 100 ms latency):
+
+```bat
+airplay-stream.exe --name "My Stream" --webrtc-port 3020
+```
+
+Then open `http://localhost:3020/` in any browser — no plugin required.
 
 With hardware acceleration:
 
@@ -71,6 +86,7 @@ Or with FFplay: `ffplay tcp://localhost:8888`
 Allow the following through Windows Firewall:
 - **TCP port 7000** (AirPlay)
 - **TCP port `<stream-port>`** (MPEG-TS output, default 8888)
+- **TCP port `<webrtc-port>`** (WebRTC HTTP signalling, when `--webrtc-port` is used)
 - **UDP port 5353** (mDNS/Bonjour)
 
 ## Hardware Acceleration
@@ -89,7 +105,10 @@ Pass `--hw-accel` to enable hardware-accelerated audio processing:
 
 - Visual Studio 2019 or 2022 with C/C++ workload
 - CMake 3.16+
-- OpenSSL (`choco install openssl` or Scoop)
+- **OpenSSL** — install the **OpenSSL Light** package:
+    - OpenSSL 4.x (recommended): [Win64OpenSSL_Light-4_0_0.msi](https://slproweb.com/download/Win64OpenSSL_Light-4_0_0.msi)
+    - Or via Chocolatey: `choco install openssl`
+    - Or via Scoop: `scoop install openssl`
 - Git (for submodules)
 
 ### Steps

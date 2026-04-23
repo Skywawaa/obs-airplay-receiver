@@ -454,11 +454,11 @@ jobs:
           if(MSVC)
               target_compile_options(airplay PRIVATE /wd4244 /wd4267 /wd4996 /wd4018 /wd4146 /wd4005 /wd4133)
           endif()
-          find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto crypto libcrypto-3-x64
+          find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto-4-x64 libcrypto-3-x64 libcrypto crypto
               PATHS "${OPENSSL_DIR}/lib" "${OPENSSL_DIR}/lib/VC" "${OPENSSL_DIR}/lib/VC/x64" "${OPENSSL_DIR}/lib/VC/x64/MD" "${OPENSSL_DIR}/lib/VC/x64/MT"
               NO_DEFAULT_PATH)
           if(NOT OPENSSL_CRYPTO_LIB)
-              find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto crypto)
+              find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto-4-x64 libcrypto-3-x64 libcrypto crypto)
           endif()
           message(STATUS "OpenSSL crypto lib: ${OPENSSL_CRYPTO_LIB}")
           target_link_libraries(airplay PUBLIC playfair llhttp
@@ -643,7 +643,7 @@ jobs:
           avutil-59.dll            — FFmpeg
           avformat-61.dll          — FFmpeg
           swresample-5.dll         — FFmpeg
-          libcrypto-3-x64.dll      — OpenSSL
+          libcrypto-[34]-x64.dll   — OpenSSL (exact name depends on installed version)
           w32-pthreads.dll         — POSIX Threads for Windows (LGPL, from OBS Studio)
           datachannel.dll          — libdatachannel WebRTC (MPL 2.0)
 

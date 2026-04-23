@@ -673,7 +673,8 @@ static void http_respond(sock_t s, int code, const char *ct,
 static void handle_http_conn(struct webrtc_output *out, sock_t cs)
 {
     char hbuf[4096];
-    if (recv_headers(cs, hbuf, (int)sizeof(hbuf)) < 0) return;
+    int hbuf_n = recv_headers(cs, hbuf, (int)sizeof(hbuf));
+    if (hbuf_n < 0) return;
 
     bool is_get  = (strncmp(hbuf, "GET ",  4) == 0);
     bool is_post = (strncmp(hbuf, "POST ", 5) == 0);
@@ -703,6 +704,31 @@ static void handle_http_conn(struct webrtc_output *out, sock_t cs)
         char *offer = (char *)malloc((size_t)clen + 1);
         if (!offer) { http_respond(cs, 500, "text/plain", "OOM", -1); return; }
 
+        /* recv_headers() may have read body bytes past the \r\n\r\n
+         * terminator into hbuf (common when headers and body arrive in
+         * the same TCP segment).  Recover those bytes so the body-reading
+         * loop below does not block waiting for data that is already gone
+         * from the socket buffer.
+         *
+         * recv_headers() always null-terminates hbuf (buf[n]='\0' in its
+         * loop), so strstr() is safe here. */
+        int received = 0;
+        const char *hdr_end = strstr(hbuf, "\r\n\r\n");
+        if (hdr_end) {
+            const char *body_start = hdr_end + 4; /* skip the blank line */
+            ptrdiff_t offset = body_start - hbuf;
+            /* offset must be within [0, hbuf_n] — guard against any
+             * unexpected pointer arithmetic result before casting. */
+            if (offset >= 0 && offset <= (ptrdiff_t)hbuf_n) {
+                int prefetched = hbuf_n - (int)offset;
+                if (prefetched > clen) prefetched = clen;
+                if (prefetched > 0) {
+                    memcpy(offer, body_start, (size_t)prefetched);
+                    received = prefetched;
+                }
+            }
+        }
+
         /* Set a receive timeout so we don't block forever if the client
          * sends fewer bytes than Content-Length promises. */
 #ifdef _WIN32
@@ -714,7 +740,6 @@ static void handle_http_conn(struct webrtc_output *out, sock_t cs)
         setsockopt(cs, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
 #endif
 
-        int received = 0;
         while (received < clen) {
             int r = (int)recv(cs, offer + received,
                               (size_t)(clen - received), 0);
