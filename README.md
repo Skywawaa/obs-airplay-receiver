@@ -27,8 +27,7 @@ iPhone/iPad/Mac  ──(AirPlay)──►  airplay-stream.exe  ──(TCP MPEG-T
   Install [iTunes](https://www.apple.com/itunes/) or the [Bonjour Print Services](https://support.apple.com/kb/DL999) package.
 - **OpenSSL** — `libcrypto-3-x64.dll` (OpenSSL 3.x) or `libcrypto-4-x64.dll` (OpenSSL 4.x) must be present next to `airplay-stream.exe`.
   The easiest way to get it is the free **OpenSSL Light** installer:
-  - OpenSSL 4.x: [Win64OpenSSL_Light-4_0_0.msi](https://slproweb.com/download/Win64OpenSSL_Light-4_0_0.msi)
-  - OpenSSL 3.x: [slproweb.com/products/Win32OpenSSL.html](https://slproweb.com/products/Win32OpenSSL.html)
+  - OpenSSL 4.x: [Win64OpenSSL_Light-3_6_2.msi](https://slproweb.com/download/Win64OpenSSL_Light-3_6_2.msi)
 
   After installation, copy the matching `libcrypto-*-x64.dll` from the OpenSSL `bin\` folder next to `airplay-stream.exe`.
 
