@@ -582,21 +582,28 @@ static void on_gathering_state(int pc, rtcGatheringState state, void *ptr)
 
 static void on_pc_state(int pc, rtcState state, void *ptr)
 {
-    (void)pc;
     struct webrtc_output *out = (struct webrtc_output *)ptr;
+    mutex_lock(&out->lock);
+    /* Ignore callbacks from a previous (already replaced) peer connection.
+     * This prevents the delayed RTC_CLOSED event of the old PC from
+     * setting pc_open=false on the new PC after a browser page reload. */
+    if (out->pc != pc) {
+        mutex_unlock(&out->lock);
+        return;
+    }
     if (state == RTC_CONNECTED) {
-        mutex_lock(&out->lock);
         out->pc_open = true;
         mutex_unlock(&out->lock);
         fprintf(stdout, "[WebRTC] Peer connection established — streaming\n");
     } else if (state == RTC_FAILED ||
                state == RTC_DISCONNECTED ||
                state == RTC_CLOSED) {
-        mutex_lock(&out->lock);
         out->pc_open = false;
         mutex_unlock(&out->lock);
         fprintf(stdout, "[WebRTC] Peer connection closed (state=%d)\n",
                 (int)state);
+    } else {
+        mutex_unlock(&out->lock);
     }
 }
 
@@ -615,23 +622,24 @@ static bool handle_offer(struct webrtc_output *out,
     if (h264_pt < 0) h264_pt = H264_PT_DEFAULT;
     if (opus_pt  < 0) opus_pt  = OPUS_PT_DEFAULT;
 
+    /* Remove old peer connection outside the lock to avoid a deadlock:
+     * rtcDeletePeerConnection may call on_pc_state synchronously on some
+     * platforms, and that callback also takes out->lock. */
     mutex_lock(&out->lock);
-
-    /* Tear down existing peer connection if any */
-    if (out->pc >= 0) {
-        rtcDeletePeerConnection(out->pc);
-        out->pc       = -1;
-        out->video_tr = -1;
-        out->audio_tr = -1;
-        out->pc_open  = false;
-    }
+    int old_pc = out->pc;
+    out->pc       = -1;
+    out->video_tr = -1;
+    out->audio_tr = -1;
+    out->pc_open  = false;
     out->video_pt = h264_pt;
     out->audio_pt = opus_pt;
     /* Reset audio RTP timestamp so the new session starts from 0 */
     out->audio_rtp_ts = 0;
     out->audio_buf_n  = 0;
-
     mutex_unlock(&out->lock);
+
+    if (old_pc >= 0)
+        rtcDeletePeerConnection(old_pc);
 
     /* Create peer connection (no STUN needed for same-machine use) */
     rtcConfiguration cfg;

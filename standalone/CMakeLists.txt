@@ -84,7 +84,6 @@ message(STATUS "[standalone] OpenSSL crypto: ${OPENSSL_CRYPTO_LIB}")
 add_executable(airplay-stream
     main.c
     airplay-stream.c
-    ts-output.c
     webrtc-output.c
 )
 
@@ -131,10 +130,10 @@ target_link_libraries(airplay-stream PRIVATE
     ${OPENSSL_CRYPTO_LIB}
 )
 
-# FFmpeg  (avformat added for MPEG-TS mux)
+# FFmpeg
 target_link_directories(airplay-stream PRIVATE ${FFMPEG_LIB_DIR})
 target_link_libraries(airplay-stream PRIVATE
-    avformat avcodec avutil swresample
+    avcodec avutil swresample
 )
 
 # libdatachannel (WebRTC — ICE / DTLS / SRTP)

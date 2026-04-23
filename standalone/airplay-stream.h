@@ -2,8 +2,8 @@
 
 /*
  * airplay-stream.h
- * Standalone AirPlay receiver that streams to an MPEG-TS TCP server.
- * No OBS dependency — output goes to VLC / any media player.
+ * Standalone AirPlay receiver with WebRTC browser output.
+ * No OBS dependency — stream to any modern browser at < 100 ms latency.
  */
 
 #include <stdbool.h>
@@ -12,8 +12,12 @@ struct airplay_stream_config {
     /* AirPlay server advertisement name (shows on Apple device) */
     char server_name[256];
 
-    /* TCP port on which the MPEG-TS stream will be served */
-    int  stream_port;
+    /*
+     * TCP port for the WebRTC HTTP signalling server (e.g. 8888).
+     * Navigate to http://localhost:<webrtc_port>/ in any modern browser
+     * for < 100 ms end-to-end latency.
+     */
+    int webrtc_port;
 
     /* Requested video resolution (0 = device native) */
     int  width;
@@ -23,30 +27,20 @@ struct airplay_stream_config {
     int  fps;
 
     /*
-     * Enable hardware-accelerated audio decode/encode via Windows
-     * Media Foundation (aac_mf).  Falls back to software if the
-     * hardware codec is unavailable.  Default: false.
+     * Enable hardware-accelerated audio decode via Windows Media Foundation
+     * (aac_mf).  Falls back to software if unavailable.  Default: false.
      */
     bool hw_accel;
-
-    /*
-     * TCP port for the WebRTC HTTP signalling server (e.g. 8889).
-     * When > 0, a WebRTC output is started in parallel with (or instead
-     * of) the MPEG-TS output.  Navigate to http://localhost:<webrtc_port>/
-     * in any modern browser for < 100 ms end-to-end latency.
-     * 0 = disabled (default).
-     */
-    int webrtc_port;
 };
 
 /*
- * Start the AirPlay receiver and MPEG-TS output server.
+ * Start the AirPlay receiver and WebRTC server.
  * Blocks briefly during initialisation then returns.
  * Returns true on success.
  */
 bool airplay_stream_start(const struct airplay_stream_config *cfg);
 
 /*
- * Stop the AirPlay receiver and close the MPEG-TS server.
+ * Stop the AirPlay receiver and close the WebRTC server.
  */
 void airplay_stream_stop(void);

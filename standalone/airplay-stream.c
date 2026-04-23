@@ -4,15 +4,13 @@
  *
  * Uses UxPlay's raop library for the full AirPlay 2 mirroring
  * protocol (FairPlay, pairing, encryption) and feeds the raw
- * H.264 / AAC data to ts-output.c for MPEG-TS TCP streaming.
+ * H.264 / AAC data to webrtc-output.c for low-latency browser playback.
  *
  * The audio is decoded from AAC-ELD to PCM here (using FFmpeg)
- * before handing it to ts-output, which then re-encodes to AAC-LC
- * for MPEG-TS compatibility.
+ * before handing it to webrtc-output, which then re-encodes to Opus.
  */
 
 #include "airplay-stream.h"
-#include "ts-output.h"
 #include "webrtc-output.h"
 
 #include <stdio.h>
@@ -62,7 +60,6 @@ struct audio_dec {
 struct airplay_ctx {
     raop_t          *raop;
     dnssd_t         *dnssd;
-    struct ts_output    *ts;
     struct webrtc_output *webrtc;
     struct audio_dec adec;
     int              open_connections;
@@ -275,9 +272,6 @@ static void cb_video_process(void *cls, raop_ntp_t *ntp,
 {
     (void)ntp;
     struct airplay_ctx *ctx = (struct airplay_ctx *)cls;
-    ts_output_write_video(ctx->ts,
-                          data->data, (size_t)data->data_len,
-                          (int64_t)data->pts);
     if (ctx->webrtc)
         webrtc_output_write_video(ctx->webrtc,
                                   data->data, (size_t)data->data_len,
@@ -298,9 +292,6 @@ static void cb_audio_process(void *cls, raop_ntp_t *ntp,
     if (samps <= 0)
         return;
 
-    ts_output_write_audio(ctx->ts, pcm, samps, ch,
-                          ctx->adec.ctx->sample_rate,
-                          (int64_t)data->ntp_time);
     if (ctx->webrtc)
         webrtc_output_write_audio(ctx->webrtc, pcm, samps, ch,
                                   ctx->adec.ctx->sample_rate,
@@ -365,21 +356,14 @@ bool airplay_stream_start(const struct airplay_stream_config *cfg)
         return false;
     }
 
-    /* Create MPEG-TS TCP output */
-    ctx->ts = ts_output_create(cfg->stream_port, cfg->hw_accel);
-    if (!ctx->ts) {
+    /* Create WebRTC output */
+    ctx->webrtc = webrtc_output_create(cfg->webrtc_port);
+    if (!ctx->webrtc) {
+        fprintf(stderr, "[AirPlay] Failed to start WebRTC server on port %d\n",
+                cfg->webrtc_port);
         adec_destroy(&ctx->adec);
         free(ctx);
         return false;
-    }
-
-    /* Create WebRTC output (optional — only when webrtc_port > 0) */
-    if (cfg->webrtc_port > 0) {
-        ctx->webrtc = webrtc_output_create(cfg->webrtc_port);
-        if (!ctx->webrtc)
-            fprintf(stderr,
-                    "[AirPlay] Warning: WebRTC output failed to start on port %d\n",
-                    cfg->webrtc_port);
     }
 
     /* Set up UxPlay callbacks */
@@ -467,7 +451,6 @@ bool airplay_stream_start(const struct airplay_stream_config *cfg)
 fail:
     if (ctx->raop)  raop_destroy(ctx->raop);
     if (ctx->dnssd) dnssd_destroy(ctx->dnssd);
-    ts_output_destroy(ctx->ts);
     if (ctx->webrtc) webrtc_output_destroy(ctx->webrtc);
     adec_destroy(&ctx->adec);
     free(ctx);
@@ -492,7 +475,6 @@ void airplay_stream_stop(void)
         raop_destroy(ctx->raop);
     }
 
-    ts_output_destroy(ctx->ts);
     if (ctx->webrtc)
         webrtc_output_destroy(ctx->webrtc);
     adec_destroy(&ctx->adec);
