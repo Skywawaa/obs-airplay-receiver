@@ -45,8 +45,12 @@ endif()
 
 # OpenSSL libcrypto
 if(NOT DEFINED OPENSSL_CRYPTO_LIB OR NOT OPENSSL_CRYPTO_LIB)
+    # Search for libcrypto by version-specific name first (newest to oldest)
+    # so that whatever OpenSSL 3.x variant is installed is found automatically.
+    #   OpenSSL 3.4+ ships libcrypto-4-x64.dll / libcrypto.lib
+    #   OpenSSL 3.0-3.3 ships libcrypto-3-x64.dll / libcrypto.lib
     find_library(OPENSSL_CRYPTO_LIB
-        NAMES libcrypto crypto libcrypto-3-x64
+        NAMES libcrypto-4-x64 libcrypto-3-x64 libcrypto crypto
         PATHS
             "${OPENSSL_DIR}/lib"
             "${OPENSSL_DIR}/lib/VC"
@@ -56,7 +60,7 @@ if(NOT DEFINED OPENSSL_CRYPTO_LIB OR NOT OPENSSL_CRYPTO_LIB)
             "${OPENSSL_DIR}/lib/VC/x86_64"
         NO_DEFAULT_PATH)
     if(NOT OPENSSL_CRYPTO_LIB)
-        find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto crypto)
+        find_library(OPENSSL_CRYPTO_LIB NAMES libcrypto-4-x64 libcrypto-3-x64 libcrypto crypto)
     endif()
 endif()
 message(STATUS "[standalone] OpenSSL crypto: ${OPENSSL_CRYPTO_LIB}")

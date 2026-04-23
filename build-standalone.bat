@@ -109,7 +109,8 @@ echo Output: build-standalone\standalone\airplay-stream.exe
 echo.
 echo Copy the following DLLs next to airplay-stream.exe:
 echo   avformat-*.dll avcodec-*.dll avutil-*.dll swresample-*.dll
-echo   libcrypto-3-x64.dll  dnssd.dll  w32-pthreads.dll
+echo   libcrypto-3-x64.dll (OpenSSL 3.0-3.3) OR libcrypto-4-x64.dll (OpenSSL 3.4+)
+echo   dnssd.dll  w32-pthreads.dll
 echo.
 echo Usage:
 echo   airplay-stream.exe [--name "My Stream"] [--port 8888]
