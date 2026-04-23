@@ -489,7 +489,7 @@ jobs:
       - name: Download w32-pthreads.dll from OBS Studio release
         shell: pwsh
         run: |
-          $url = "https://github.com/obsproject/obs-studio/releases/download/32.1.2/OBS-Studio-32.1.2-Windows.zip"
+          $url = "https://github.com/obsproject/obs-studio/releases/download/32.1.2/OBS-Studio-32.1.2-Windows-x64.zip"
           $dest = "$env:TEMP\obs-release.zip"
           $extractDir = "$env:TEMP\obs-release"
           Invoke-WebRequest -Uri $url -OutFile $dest -MaximumRetryCount 3 -RetryIntervalSec 5
