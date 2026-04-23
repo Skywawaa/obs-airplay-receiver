@@ -677,9 +677,15 @@ static bool handle_offer(struct webrtc_output *out,
     out->pc_open  = false;
     out->video_pt = h264_pt;
     out->audio_pt = opus_pt;
-    /* Reset audio RTP timestamp so the new session starts from 0 */
+    /* Reset audio RTP timestamp so the new session starts from 0.
+     * Also flush the Opus encoder so its internal PTS counter is reset;
+     * without this, sending frames with pts=0 to an encoder that last saw
+     * a much higher PTS triggers an FFmpeg "Queue input is backward in time"
+     * warning and the encoder may silently drop the initial audio frames. */
     out->audio_rtp_ts = 0;
     out->audio_buf_n  = 0;
+    if (out->opus_ctx)
+        avcodec_flush_buffers(out->opus_ctx);
     mutex_unlock(&out->lock);
 
     if (old_pc >= 0)
@@ -1220,33 +1226,36 @@ void webrtc_output_write_video(struct webrtc_output *out,
     if (!out || !data || size == 0) return;
 
     mutex_lock(&out->lock);
+
+    /* Always cache the most recent IDR frame, regardless of whether a
+     * peer connection is currently active.  This ensures that a browser
+     * which opens the page while the AirPlay stream is already in progress
+     * (i.e. after the first natural IDR has already been sent) will still
+     * receive an immediate picture on its first connection. */
+    bool is_idr = h264_has_idr(data, size);
+    if (is_idr) {
+        uint8_t *new_cache = (uint8_t *)malloc(size);
+        if (new_cache) {
+            free(out->keyframe_cache);
+            out->keyframe_cache      = new_cache;
+            out->keyframe_cache_size = size;
+            memcpy(out->keyframe_cache, data, size);
+        } else {
+            fprintf(stderr,
+                    "[WebRTC] Warning: keyframe cache allocation failed"
+                    " (%zu bytes); reconnecting browsers may not get"
+                    " immediate video\n", size);
+        }
+    }
+
     if (out->pc_open && out->video_tr >= 0) {
         /* Convert microsecond PTS to 90 kHz RTP timestamp */
         uint32_t ts = (uint32_t)
             ((pts_us * (int64_t)H264_CLOCK_RATE) / 1000000LL);
 
-        bool is_idr = h264_has_idr(data, size);
-
-        /* Cache every IDR frame so it can be replayed to reconnecting browsers.
-         * An IDR frame is a complete, self-contained decodable unit: it always
-         * arrives together with the SPS and PPS NALs that precede it in the
-         * same Annex-B buffer, so caching the whole buffer is sufficient. */
-        if (is_idr) {
-            uint8_t *new_cache = (uint8_t *)malloc(size);
-            if (new_cache) {
-                free(out->keyframe_cache);
-                out->keyframe_cache      = new_cache;
-                out->keyframe_cache_size = size;
-                memcpy(out->keyframe_cache, data, size);
-            } else {
-                fprintf(stderr,
-                        "[WebRTC] Warning: keyframe cache allocation failed"
-                        " (%zu bytes); reconnecting browsers may not get"
-                        " immediate video\n", size);
-            }
-            /* A new keyframe satisfies any pending reconnect request */
+        /* A freshly received IDR satisfies any pending reconnect request */
+        if (is_idr)
             out->needs_keyframe = false;
-        }
 
         /* When a new peer just connected and the first incoming frame is not
          * already an IDR, inject the cached keyframe first.  Without this,
