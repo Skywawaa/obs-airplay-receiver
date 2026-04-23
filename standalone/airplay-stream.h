@@ -2,7 +2,7 @@
 
 /*
  * airplay-stream.h
- * Standalone AirPlay receiver with WebRTC browser output.
+ * Standalone AirPlay receiver with WebRTC browser output via mediasoup SFU.
  * No OBS dependency — stream to any modern browser at < 100 ms latency.
  */
 
@@ -13,24 +13,12 @@ struct airplay_stream_config {
     char server_name[256];
 
     /*
-     * TCP port for the WebRTC HTTP viewer server (e.g. 8888).
-     * Navigate to http://localhost:<webrtc_port>/ in any modern browser
-     * for < 100 ms end-to-end latency (via LiveKit SFU).
+     * Port of the mediasoup signalling server (e.g. 8888).
+     * Start the mediasoup server first:
+     *   cd mediasoup-server && npm install && node server.js
+     * Then navigate to http://localhost:<webrtc_port>/ in any modern browser.
      */
     int webrtc_port;
-
-    /*
-     * LiveKit server HTTP URL (e.g. "http://localhost:7880").
-     * Set to "" or leave zero to use the default ("http://localhost:7880").
-     */
-    char livekit_url[512];
-
-    /*
-     * LiveKit API key and secret for JWT signing.
-     * Defaults: "devkey" / "secret" (matches LiveKit --dev flag).
-     */
-    char livekit_api_key[128];
-    char livekit_api_secret[256];
 
     /* Requested video resolution (0 = device native) */
     int  width;

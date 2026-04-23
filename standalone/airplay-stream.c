@@ -364,17 +364,8 @@ bool airplay_stream_start(const struct airplay_stream_config *cfg)
         return false;
     }
 
-    /* Create WebRTC/LiveKit output */
-    ctx->webrtc = webrtc_output_create(cfg->webrtc_port,
-                                       cfg->livekit_url[0]
-                                           ? cfg->livekit_url
-                                           : NULL,
-                                       cfg->livekit_api_key[0]
-                                           ? cfg->livekit_api_key
-                                           : NULL,
-                                       cfg->livekit_api_secret[0]
-                                           ? cfg->livekit_api_secret
-                                           : NULL);
+    /* Create WebRTC output (connects to mediasoup SFU) */
+    ctx->webrtc = webrtc_output_create(cfg->webrtc_port);
     if (!ctx->webrtc) {
         fprintf(stderr, "[AirPlay] Failed to start WebRTC server on port %d\n",
                 cfg->webrtc_port);

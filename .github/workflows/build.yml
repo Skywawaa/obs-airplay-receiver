@@ -528,30 +528,6 @@ jobs:
           }
           Get-ChildItem ffmpeg-dlls\
 
-      - name: Download and build libdatachannel
-        shell: cmd
-        run: |
-          REM Capture absolute paths before any directory changes
-          set LIBDC_ROOT=%CD%
-          set LIBDC_SRC=%CD%\deps\libdatachannel-src
-          set LIBDC_INSTALL=%CD%\deps\libdatachannel
-          git clone --depth 1 --recurse-submodules --branch v0.24.2 ^
-            https://github.com/paullouisageneau/libdatachannel.git "%LIBDC_SRC%"
-          if errorlevel 1 exit /b 1
-          cmake -S "%LIBDC_SRC%" -B "%LIBDC_SRC%\build" -G "NMake Makefiles" ^
-              -DCMAKE_BUILD_TYPE=Release ^
-              -DUSE_GNUTLS=0 ^
-              "-DCMAKE_INSTALL_PREFIX=%LIBDC_INSTALL%"
-          if errorlevel 1 exit /b 1
-          cd /d "%LIBDC_SRC%\build"
-          nmake
-          if errorlevel 1 exit /b 1
-          cmake --install "%LIBDC_SRC%\build"
-          if errorlevel 1 exit /b 1
-          REM Clean up source tree to save disk space
-          cd /d "%LIBDC_ROOT%"
-          rmdir /s /q "%LIBDC_SRC%"
-
       - name: Build standalone airplay-stream.exe
         shell: cmd
         run: |
@@ -615,7 +591,7 @@ jobs:
           cp ffmpeg-dlls/*.dll artifact-standalone/ 2>/dev/null || true
           # w32-pthreads DLL
           cp w32-pthreads-dll/w32-pthreads.dll artifact-standalone/
-          # OpenSSL DLL (handle any libcrypto-*-x64.dll version)
+          # OpenSSL DLL (required by UxPlay — handle any libcrypto-*-x64.dll version)
           OPENSSL_DIR="${{ steps.openssl.outputs.dir }}"
           found_crypto=0
           for dll in "$OPENSSL_DIR/bin"/libcrypto-*-x64.dll "$OPENSSL_DIR"/libcrypto-*-x64.dll "$OPENSSL_DIR/bin"/libcrypto*.dll; do
@@ -630,41 +606,61 @@ jobs:
             echo "ERROR: No libcrypto DLL found in $OPENSSL_DIR"
             exit 1
           fi
-          # libdatachannel DLL
-          cp deps/libdatachannel/bin/datachannel.dll artifact-standalone/
+          # mediasoup SFU server (Node.js — browsers connect here)
+          cp -r standalone/mediasoup-server artifact-standalone/mediasoup-server
           cp README.md artifact-standalone/
           cat > artifact-standalone/README-STANDALONE.txt << 'EOF'
-          airplay-stream.exe — Standalone AirPlay to MPEG-TS TCP streamer
-          =================================================================
+          airplay-stream.exe — Standalone AirPlay to WebRTC (mediasoup) streamer
+          =========================================================================
+
+          QUICK START
+          -----------
+          1. Install Node.js >= 18 from https://nodejs.org/ (if not already installed)
+
+          2. Start the mediasoup SFU server:
+               cd mediasoup-server
+               npm install
+               node server.js
+
+             The first "npm install" also bundles the browser player JS (~450 KB).
+             Keep this terminal open while streaming.
+
+          3. In a second terminal, start the AirPlay receiver:
+               airplay-stream.exe [--name "My Stream"] [--port 8888]
+
+          4. On your iPhone/iPad/Mac, mirror your screen to "AirPlay Stream"
+             (or whatever name you passed to --name).
+
+          5. Open http://localhost:8888/ in any modern browser to watch.
 
           INCLUDED FILES
           --------------
-          airplay-stream.exe       — The standalone AirPlay receiver
-          avcodec-61.dll           — FFmpeg (LGPL/GPL)
-          avutil-59.dll            — FFmpeg
-          avformat-61.dll          — FFmpeg
-          swresample-5.dll         — FFmpeg
-          libcrypto-[34]-x64.dll   — OpenSSL (exact name depends on installed version)
-          w32-pthreads.dll         — POSIX Threads for Windows (LGPL, from OBS Studio)
-          datachannel.dll          — libdatachannel WebRTC (MPL 2.0)
+          airplay-stream.exe       — AirPlay receiver (sends RTP to mediasoup)
+          mediasoup-server/        — Node.js SFU server + browser player
+          avcodec-*.dll            — FFmpeg (LGPL/GPL)
+          avutil-*.dll             — FFmpeg
+          avformat-*.dll           — FFmpeg
+          swresample-*.dll         — FFmpeg
+          libcrypto-[34]-x64.dll   — OpenSSL (used by AirPlay crypto)
+          w32-pthreads.dll         — POSIX Threads for Windows (LGPL)
 
-          ADDITIONAL REQUIREMENTS (not bundled for licensing reasons)
-          -----------------------------------------------------------
-          1. dnssd.dll — Apple Bonjour / mDNS
-             Install via:
-               • iTunes for Windows (free from microsoft.com/en-us/p/itunes)
-               • Bonjour Print Services for Windows:
-                 https://support.apple.com/kb/DL999
-             Once installed, dnssd.dll will be in your system PATH.
+          ADDITIONAL REQUIREMENTS (not bundled)
+          --------------------------------------
+          • dnssd.dll — Apple Bonjour / mDNS
+            Install via iTunes for Windows or Bonjour Print Services:
+              https://support.apple.com/kb/DL999
+          • Node.js >= 18 — https://nodejs.org/
 
-          USAGE
-          -----
-          airplay-stream.exe [--name "My Stream"] [--port 8888]
-          airplay-stream.exe --hw-accel
-          airplay-stream.exe --help
+          NETWORK ACCESS
+          --------------
+          To allow browsers on other devices to connect, set the ANNOUNCED_IP
+          environment variable to your machine's LAN IP before starting
+          the mediasoup server:
 
-          Then open the stream in VLC:
-            vlc tcp://localhost:8888
+            Windows:  set ANNOUNCED_IP=192.168.1.x && node server.js
+            macOS/Linux: ANNOUNCED_IP=192.168.1.x node server.js
+
+          Then browse to http://<your-ip>:8888/ on the other device.
           EOF
           ls -la artifact-standalone/
 

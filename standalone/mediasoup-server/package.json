@@ -1,0 +1,21 @@
+{
+  "name": "airplay-mediasoup-server",
+  "version": "1.0.0",
+  "description": "mediasoup SFU server for airplay-stream — receives plain RTP from the C app and forwards it to WebRTC browsers.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "esbuild node_modules/mediasoup-client/lib/index.js --bundle --outfile=public/mediasoup-client.bundle.js --platform=browser --format=iife --global-name=mediasoupClient",
+    "postinstall": "npm run build"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "esbuild": "^0.25.3",
+    "express": "^5.2.1",
+    "mediasoup": "^3.19.21",
+    "mediasoup-client": "^3.19.0",
+    "ws": "^8.20.0"
+  }
+}

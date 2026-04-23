@@ -1,9 +1,12 @@
 /*
  * main.c — airplay-stream.exe
  *
- * Standalone AirPlay receiver that streams to a browser via WebRTC.
+ * Standalone AirPlay receiver that streams to browsers via mediasoup SFU.
  *
- * Usage:
+ * Prerequisites:
+ *   cd mediasoup-server && npm install && node server.js [PORT=8888]
+ *
+ * Then run:
  *   airplay-stream [--name <name>] [--port <port>]
  *                  [--width <w>] [--height <h>] [--fps <fps>]
  *
@@ -64,28 +67,23 @@ static void print_usage(const char *prog)
     fprintf(stdout,
         "Usage: %s [options]\n"
         "\n"
-        "Options:\n"
-        "  --name  <name>     AirPlay server name shown on Apple devices\n"
-        "                     (default: \"AirPlay Stream\")\n"
-        "  --port  <port>     HTTP port for the WebRTC player\n"
-        "                     (default: 8888). Open http://localhost:<port>/\n"
-        "                     in any modern browser for < 100 ms latency.\n"
-        "  --livekit-url <u>  LiveKit server HTTP URL\n"
-        "                     (default: \"http://localhost:7880\")\n"
-        "  --api-key <key>    LiveKit API key (default: \"devkey\")\n"
-        "  --api-secret <s>   LiveKit API secret (default: \"secret\")\n"
-        "  --width  <px>      Requested video width  (default: device native)\n"
-        "  --height <px>      Requested video height (default: device native)\n"
-        "  --fps    <fps>     Requested frame rate   (default: 60)\n"
-        "  --hw-accel         Enable hardware-accelerated audio codec\n"
-        "                     (Windows: uses aac_mf via Media Foundation,\n"
-        "                      falls back to software if unavailable)\n"
-        "  --help             Show this help message\n"
+        "Prerequisites:\n"
+        "  cd mediasoup-server && npm install && node server.js\n"
+        "  (set PORT=<port> env var to match --port below)\n"
         "\n"
-        "LiveKit server (Docker):\n"
-        "  docker run --rm -p 7880:7880 -p 7881:7881 \\\n"
-        "    -p 50000-60000:50000-60000/udp \\\n"
-        "    livekit/livekit-server --dev\n"
+        "Options:\n"
+        "  --name  <name>   AirPlay server name shown on Apple devices\n"
+        "                   (default: \"AirPlay Stream\")\n"
+        "  --port  <port>   Port of the mediasoup signalling server\n"
+        "                   (default: 8888). Open http://localhost:<port>/\n"
+        "                   in any modern browser for < 100 ms latency.\n"
+        "  --width  <px>    Requested video width  (default: device native)\n"
+        "  --height <px>    Requested video height (default: device native)\n"
+        "  --fps    <fps>   Requested frame rate   (default: 60)\n"
+        "  --hw-accel       Enable hardware-accelerated audio codec\n"
+        "                   (Windows: uses aac_mf via Media Foundation,\n"
+        "                    falls back to software if unavailable)\n"
+        "  --help           Show this help message\n"
         "\n"
         "Open in browser: http://localhost:<port>/\n",
         prog);
@@ -102,13 +100,6 @@ static int parse_args(int argc, char **argv,
     cfg->height      = 0;
     cfg->fps         = 60;
     cfg->hw_accel    = false;
-    /* LiveKit defaults (match livekit-server --dev) */
-    strncpy(cfg->livekit_url,        "http://localhost:7880",
-            sizeof(cfg->livekit_url) - 1);
-    strncpy(cfg->livekit_api_key,    "devkey",
-            sizeof(cfg->livekit_api_key) - 1);
-    strncpy(cfg->livekit_api_secret, "secret",
-            sizeof(cfg->livekit_api_secret) - 1);
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--help") == 0 ||
@@ -121,15 +112,6 @@ static int parse_args(int argc, char **argv,
                     sizeof(cfg->server_name) - 1);
         } else if (strcmp(argv[i], "--port") == 0 && i + 1 < argc) {
             cfg->webrtc_port = atoi(argv[++i]);
-        } else if (strcmp(argv[i], "--livekit-url") == 0 && i + 1 < argc) {
-            strncpy(cfg->livekit_url, argv[++i],
-                    sizeof(cfg->livekit_url) - 1);
-        } else if (strcmp(argv[i], "--api-key") == 0 && i + 1 < argc) {
-            strncpy(cfg->livekit_api_key, argv[++i],
-                    sizeof(cfg->livekit_api_key) - 1);
-        } else if (strcmp(argv[i], "--api-secret") == 0 && i + 1 < argc) {
-            strncpy(cfg->livekit_api_secret, argv[++i],
-                    sizeof(cfg->livekit_api_secret) - 1);
         } else if (strcmp(argv[i], "--width") == 0 && i + 1 < argc) {
             cfg->width = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--height") == 0 && i + 1 < argc) {
@@ -167,17 +149,15 @@ int main(int argc, char **argv)
         snprintf(res_str, sizeof(res_str), "device native");
 
     fprintf(stdout,
-            "airplay-stream — AirPlay to LiveKit WebRTC streamer\n"
-            "------------------------------------------------------\n"
-            "Server name  : %s\n"
-            "WebRTC port  : %d\n"
-            "LiveKit URL  : %s\n"
-            "Resolution   : %s\n"
-            "FPS          : %d\n"
-            "HW accel     : %s\n\n",
+            "airplay-stream — AirPlay to mediasoup WebRTC streamer\n"
+            "-------------------------------------------------------\n"
+            "Server name    : %s\n"
+            "mediasoup port : %d\n"
+            "Resolution     : %s\n"
+            "FPS            : %d\n"
+            "HW accel       : %s\n\n",
             cfg.server_name,
             cfg.webrtc_port,
-            cfg.livekit_url,
             res_str,
             cfg.fps,
             cfg.hw_accel ? "enabled (aac_mf)" : "disabled (software)");

@@ -43,24 +43,8 @@ if(NOT DEFINED OPENSSL_DIR)
     set(OPENSSL_DIR "C:/Users/kitti/scoop/apps/openssl/current")
 endif()
 
-# libdatachannel: WebRTC transport (ICE / DTLS / SRTP).
-# Download a prebuilt release from:
-#   https://github.com/paullouisageneau/libdatachannel/releases
-# and extract it so that:
-#   <LIBDATACHANNEL_DIR>/include/rtc/rtc.h
-#   <LIBDATACHANNEL_DIR>/lib/datachannel.lib   (Windows import lib)
-#   <LIBDATACHANNEL_DIR>/bin/datachannel.dll   (runtime — copy next to .exe)
-# Override the path with -DLIBDATACHANNEL_DIR=...
-if(NOT DEFINED LIBDATACHANNEL_DIR)
-    set(LIBDATACHANNEL_DIR "${DEPS_DIR}/libdatachannel")
-endif()
-
-# OpenSSL libcrypto
+# OpenSSL libcrypto — required by the UxPlay static library (crypto, pairing).
 if(NOT DEFINED OPENSSL_CRYPTO_LIB OR NOT OPENSSL_CRYPTO_LIB)
-    # Search for libcrypto by version-specific name first (newest to oldest)
-    # so that whatever OpenSSL 3.x variant is installed is found automatically.
-    #   OpenSSL 3.4+ ships libcrypto-4-x64.dll / libcrypto.lib
-    #   OpenSSL 3.0-3.3 ships libcrypto-3-x64.dll / libcrypto.lib
     find_library(OPENSSL_CRYPTO_LIB
         NAMES libcrypto-4-x64 libcrypto-3-x64 libcrypto crypto
         PATHS
@@ -101,12 +85,10 @@ target_include_directories(airplay-stream PRIVATE
     ${LIBPLIST_DIR}/include
     # FFmpeg headers
     ${FFMPEG_INCLUDE_DIR}
-    # OpenSSL headers
+    # OpenSSL headers (needed by UxPlay)
     ${OPENSSL_DIR}/include
     # w32-pthreads headers (needed by UxPlay headers on Windows)
     ${W32_PTHREADS_DIR}
-    # libdatachannel headers (WebRTC)
-    ${LIBDATACHANNEL_DIR}/include
 )
 
 # ---------------------------------------------------------------
@@ -136,27 +118,8 @@ target_link_libraries(airplay-stream PRIVATE
     avcodec avutil swresample
 )
 
-# libdatachannel (WebRTC — ICE / DTLS / SRTP)
-# Tries <dir>/lib/datachannel.lib first (dynamic), then datachannel-static.lib.
-find_library(LIBDATACHANNEL_LIB
-    NAMES datachannel datachannel-static
-    PATHS "${LIBDATACHANNEL_DIR}/lib"
-    NO_DEFAULT_PATH)
-if(NOT LIBDATACHANNEL_LIB)
-    message(FATAL_ERROR
-        "[standalone] libdatachannel not found in ${LIBDATACHANNEL_DIR}/lib\n"
-        "Download a prebuilt release from "
-        "https://github.com/paullouisageneau/libdatachannel/releases "
-        "and place it in deps/libdatachannel/ (or pass -DLIBDATACHANNEL_DIR=...)")
-endif()
-# Inform the user which variant (dynamic DLL import lib or static) was selected.
-get_filename_component(_ldc_name "${LIBDATACHANNEL_LIB}" NAME_WE)
-if(_ldc_name MATCHES "static")
-    message(STATUS "[standalone] libdatachannel: ${LIBDATACHANNEL_LIB} (static)")
-else()
-    message(STATUS "[standalone] libdatachannel: ${LIBDATACHANNEL_LIB} (dynamic — copy datachannel.dll next to airplay-stream.exe)")
-endif()
-target_link_libraries(airplay-stream PRIVATE ${LIBDATACHANNEL_LIB})
+# libdatachannel removed — WebRTC is now handled by the mediasoup Node.js SFU.
+# The C app sends plain UDP RTP to the mediasoup PlainTransport.
 
 # Windows system libraries
 target_link_libraries(airplay-stream PRIVATE
