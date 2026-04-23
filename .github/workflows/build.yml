@@ -526,6 +526,27 @@ jobs:
           }
           Get-ChildItem ffmpeg-dlls\
 
+      - name: Download and build libdatachannel
+        shell: cmd
+        run: |
+          REM Capture repo root before changing directories
+          set LIBDC_INSTALL=%CD%\deps\libdatachannel
+          git clone --depth 1 --recurse-submodules --branch v0.24.2 ^
+            https://github.com/paullouisageneau/libdatachannel.git deps\libdatachannel-src
+          if errorlevel 1 exit /b 1
+          cd deps\libdatachannel-src
+          cmake -B build -G "NMake Makefiles" ^
+              -DCMAKE_BUILD_TYPE=Release ^
+              -DUSE_GNUTLS=0 ^
+              "-DCMAKE_INSTALL_PREFIX=%LIBDC_INSTALL%"
+          if errorlevel 1 exit /b 1
+          cd build
+          nmake
+          if errorlevel 1 exit /b 1
+          cd ..
+          cmake --install build
+          if errorlevel 1 exit /b 1
+
       - name: Build standalone airplay-stream.exe
         shell: cmd
         run: |
@@ -604,6 +625,8 @@ jobs:
             echo "ERROR: No libcrypto DLL found in $OPENSSL_DIR"
             exit 1
           fi
+          # libdatachannel DLL
+          cp deps/libdatachannel/bin/datachannel.dll artifact-standalone/
           cp README.md artifact-standalone/
           cat > artifact-standalone/README-STANDALONE.txt << 'EOF'
           airplay-stream.exe — Standalone AirPlay to MPEG-TS TCP streamer
@@ -618,6 +641,7 @@ jobs:
           swresample-5.dll         — FFmpeg
           libcrypto-3-x64.dll      — OpenSSL
           w32-pthreads.dll         — POSIX Threads for Windows (LGPL, from OBS Studio)
+          datachannel.dll          — libdatachannel WebRTC (MPL 2.0)
 
           ADDITIONAL REQUIREMENTS (not bundled for licensing reasons)
           -----------------------------------------------------------
