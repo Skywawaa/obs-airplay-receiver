@@ -24,10 +24,6 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <time.h>
-#ifdef _WIN32
-/* BCryptGenRandom (fallback SSRC entropy) */
-#  include <bcrypt.h>
-#endif
 
 /* ------------------------------------------------------------------ */
 /* Platform abstractions                                                */
@@ -39,6 +35,8 @@
 #  include <ws2tcpip.h>
 #  include <windows.h>
 #  include <process.h>
+/* BCryptGenRandom (fallback SSRC entropy) */
+#  include <bcrypt.h>
 
 typedef SOCKET sock_t;
 #  define INVALID_SOCK  INVALID_SOCKET
