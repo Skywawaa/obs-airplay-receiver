@@ -257,6 +257,7 @@ jobs:
               av_channel_layout_default
               av_channel_layout_copy
               av_get_pix_fmt_string
+              av_opt_set
           FFDEF
 
           cat > deps/swscale.def << 'FFDEF'

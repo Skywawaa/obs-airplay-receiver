@@ -546,8 +546,9 @@ static bool handle_offer(struct webrtc_output *out,
         return false;
     }
 
-    rtcOnStateChange(pc, on_pc_state, out);
-    rtcOnGatheringStateChange(pc, on_gathering_state, out);
+    rtcSetUserPointer(pc, out);
+    rtcSetStateChangeCallback(pc, on_pc_state);
+    rtcSetGatheringStateChangeCallback(pc, on_gathering_state);
 
     /* Build SDP media section strings using the PT we extracted.
      * Buffers are 512 bytes; the largest possible string is well under 256. */
