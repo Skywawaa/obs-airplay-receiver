@@ -179,7 +179,11 @@ static void thread_start(void (*fn)(void *), void *arg) {
 #define AUDIO_BUF_FRAMES 8
 #define AUDIO_BUF_CAP    (OPUS_FRAME_SIZE * AUDIO_BUF_FRAMES)
 
-/* Maximum SDP body size accepted from the browser */
+/* One video frame offset at 60 fps in 90 kHz ticks (≈ 33 ms).
+ * Used to back-date injected keyframes so the decoder sees them
+ * before the following P-frame. */
+#define H264_FRAME_TICKS (H264_CLOCK_RATE / 60)
+
 #define MAX_SDP_OFFER_SIZE  65536
 
 /* Temporary stack buffer for one SWR resample call (per-channel samples) */
@@ -316,6 +320,11 @@ struct webrtc_output {
     float    audio_buf[AUDIO_BUF_CAP * OPUS_CHANNELS];
     int      audio_buf_n;     /* samples buffered PER CHANNEL */
     int64_t  audio_rtp_ts;   /* next Opus RTP timestamp (samples @ 48 kHz) */
+
+    /* Keyframe cache: last IDR frame (SPS+PPS+IDR, Annex-B) for reconnects */
+    uint8_t *keyframe_cache;
+    size_t   keyframe_cache_size;
+    bool     needs_keyframe;  /* inject cached KF before next P-frame */
 };
 
 /* ------------------------------------------------------------------ */
@@ -466,6 +475,32 @@ static void rtp_write_header(uint8_t *buf, int pt, bool marker,
 /* ------------------------------------------------------------------ */
 
 /*
+ * Return true if the Annex-B buffer contains at least one IDR NAL unit
+ * (NAL type 5).  Used to detect keyframes so they can be cached and
+ * re-injected for browsers that connect after the stream has started.
+ */
+static bool h264_has_idr(const uint8_t *data, size_t size)
+{
+    for (size_t i = 0; i + 2 < size; ) {
+        int sc = 0;
+        if (i + 3 < size &&
+            data[i]==0 && data[i+1]==0 && data[i+2]==0 && data[i+3]==1)
+            sc = 4;
+        else if (data[i]==0 && data[i+1]==0 && data[i+2]==1)
+            sc = 3;
+        if (sc) {
+            size_t nal_start = i + (size_t)sc;
+            if (nal_start < size && (data[nal_start] & 0x1F) == 5)
+                return true;
+            i = nal_start;
+        } else {
+            i++;
+        }
+    }
+    return false;
+}
+
+/*
  * Send one raw NAL unit (without Annex-B start code) as RTP.
  * Uses Single NAL Unit Packet if size <= RTP_MAX_PAYLOAD,
  * otherwise FU-A fragmentation.
@@ -601,6 +636,7 @@ static void on_pc_state(int pc, rtcState state, void *ptr)
     }
     if (state == RTC_CONNECTED) {
         out->pc_open = true;
+        out->needs_keyframe = true;
         mutex_unlock(&out->lock);
         fprintf(stdout, "[WebRTC] Peer connection established — streaming\n");
     } else if (state == RTC_FAILED ||
@@ -1170,6 +1206,7 @@ void webrtc_output_destroy(struct webrtc_output *out)
         sock_close(out->http_listen);
 
     opus_encoder_destroy(out);
+    free(out->keyframe_cache);
 
     if (out->gather_evt) event_destroy(out->gather_evt);
     mutex_destroy(&out->lock);
@@ -1187,6 +1224,46 @@ void webrtc_output_write_video(struct webrtc_output *out,
         /* Convert microsecond PTS to 90 kHz RTP timestamp */
         uint32_t ts = (uint32_t)
             ((pts_us * (int64_t)H264_CLOCK_RATE) / 1000000LL);
+
+        bool is_idr = h264_has_idr(data, size);
+
+        /* Cache every IDR frame so it can be replayed to reconnecting browsers.
+         * An IDR frame is a complete, self-contained decodable unit: it always
+         * arrives together with the SPS and PPS NALs that precede it in the
+         * same Annex-B buffer, so caching the whole buffer is sufficient. */
+        if (is_idr) {
+            uint8_t *new_cache = (uint8_t *)malloc(size);
+            if (new_cache) {
+                free(out->keyframe_cache);
+                out->keyframe_cache      = new_cache;
+                out->keyframe_cache_size = size;
+                memcpy(out->keyframe_cache, data, size);
+            } else {
+                fprintf(stderr,
+                        "[WebRTC] Warning: keyframe cache allocation failed"
+                        " (%zu bytes); reconnecting browsers may not get"
+                        " immediate video\n", size);
+            }
+            /* A new keyframe satisfies any pending reconnect request */
+            out->needs_keyframe = false;
+        }
+
+        /* When a new peer just connected and the first incoming frame is not
+         * already an IDR, inject the cached keyframe first.  Without this,
+         * the browser's H.264 decoder would start with a P-frame and produce
+         * no picture until the next natural IDR arrives (up to several seconds
+         * later on a slow-updating AirPlay stream). */
+        if (out->needs_keyframe && out->keyframe_cache &&
+            out->keyframe_cache_size > 0) {
+            /* Back-date the injected keyframe by one frame period so the
+             * decoder processes it before the following P-frame. */
+            uint32_t kf_ts = (ts >= H264_FRAME_TICKS)
+                             ? ts - H264_FRAME_TICKS : 0;
+            rtp_send_h264(out, out->keyframe_cache, out->keyframe_cache_size,
+                          kf_ts);
+            out->needs_keyframe = false;
+        }
+
         rtp_send_h264(out, data, size, ts);
     }
     mutex_unlock(&out->lock);
