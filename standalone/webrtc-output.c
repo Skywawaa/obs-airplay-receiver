@@ -904,6 +904,8 @@ static void rtp_send_h264(struct webrtc_output *out,
 
 static bool opus_encoder_init(struct webrtc_output *out)
 {
+    fprintf(stdout, "[WebRTC] opus_encoder_init: finding Opus encoder...\n");
+    fflush(stdout);
     /* Prefer built-in Opus first for maximum runtime compatibility.
      * Some shared FFmpeg bundles expose libopus wrapper with extra deps. */
     out->opus_codec = avcodec_find_encoder(AV_CODEC_ID_OPUS);
@@ -914,9 +916,13 @@ static bool opus_encoder_init(struct webrtc_output *out)
         return false;
     }
 
+    fprintf(stdout, "[WebRTC] opus_encoder_init: allocating context...\n");
+    fflush(stdout);
     out->opus_ctx = avcodec_alloc_context3(out->opus_codec);
     if (!out->opus_ctx) return false;
 
+    fprintf(stdout, "[WebRTC] opus_encoder_init: configuring...\n");
+    fflush(stdout);
     out->opus_ctx->sample_rate = OPUS_SAMPLE_RATE;
     out->opus_ctx->sample_fmt  = AV_SAMPLE_FMT_FLT;
     av_channel_layout_default(&out->opus_ctx->ch_layout, OPUS_CHANNELS);
@@ -927,12 +933,16 @@ static bool opus_encoder_init(struct webrtc_output *out)
      * Keep startup robust by only setting optional tuning when available. */
     /* Optional encoder tuning can be build-dependent; keep startup robust. */
 
+    fprintf(stdout, "[WebRTC] opus_encoder_init: opening encoder...\n");
+    fflush(stdout);
     if (avcodec_open2(out->opus_ctx, out->opus_codec, NULL) < 0) {
         fprintf(stderr, "[WebRTC] Failed to open Opus encoder\n");
         avcodec_free_context(&out->opus_ctx);
         return false;
     }
 
+    fprintf(stdout, "[WebRTC] opus_encoder_init: allocating frame/packet...\n");
+    fflush(stdout);
     out->opus_frame = av_frame_alloc();
     out->opus_pkt   = av_packet_alloc();
     if (!out->opus_frame || !out->opus_pkt) goto fail_enc;
@@ -1189,15 +1199,25 @@ struct webrtc_output *webrtc_output_create_with_options(
 
     fprintf(stdout, "[WebRTC] Initializing Opus encoder...\n");
     fflush(stdout);
+    /* Skip Opus encoder init for debugging - audio disabled by default for debug
+    out->opus_disabled = true;
     if (!opus_encoder_init(out)) {
         out->opus_disabled = true;
         fprintf(stderr,
                 "[WebRTC] Warning: Opus init failed at startup, continuing without audio\n");
         fflush(stderr);
     }
+    */
+    fprintf(stdout, "[WebRTC] Opus encoder: disabled for debug\n");
+    out->opus_disabled = true;
 
     fprintf(stdout, "[WebRTC] Starting connect thread...\n");
     fflush(stdout);
+    /* Skip Opus encoder init for debugging - audio disabled */
+    out->opus_disabled = true;
+    fprintf(stdout, "[WebRTC] Opus encoder: disabled for debug\n");
+    fflush(stdout);
+
     /* Start background thread to connect to mediasoup */
     thread_start(connect_thread, out);
     fflush(stdout);
