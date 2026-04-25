@@ -111,7 +111,6 @@ static void thread_start(void (*fn)(void *), void *arg) {
 #include <libavutil/opt.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/imgutils.h>
-#include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 
@@ -418,11 +417,11 @@ static bool transcode_init_encoder_for_frame(struct webrtc_output *out,
     out->transcode_active = true;
 
     fprintf(stdout,
-            "[WebRTC] Transcode initialized: %s %dx%d %s gop=%d\n",
+            "[WebRTC] Transcode initialized: %s %dx%d pix_fmt=%d gop=%d\n",
             out->selected_video_encoder->name,
             out->video_enc_ctx->width,
             out->video_enc_ctx->height,
-            av_get_pix_fmt_name(out->video_enc_ctx->pix_fmt),
+            (int)out->video_enc_ctx->pix_fmt,
             out->video_enc_ctx->gop_size);
 
     return true;
@@ -489,7 +488,7 @@ static void transcode_process_video(struct webrtc_output *out,
                                     int64_t pts_us)
 {
     AVPacket in_pkt;
-    av_init_packet(&in_pkt);
+    memset(&in_pkt, 0, sizeof(in_pkt));
     in_pkt.data = (uint8_t *)data;
     in_pkt.size = (int)size;
 
@@ -512,8 +511,6 @@ static void transcode_process_video(struct webrtc_output *out,
         }
 
         if (out->video_sws && out->video_enc_frame) {
-            if (av_frame_make_writable(out->video_enc_frame) < 0)
-                return;
             sws_scale(out->video_sws,
                       (const uint8_t * const *)out->video_dec_frame->data,
                       out->video_dec_frame->linesize,
