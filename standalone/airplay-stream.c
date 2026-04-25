@@ -449,8 +449,6 @@ bool airplay_stream_start(const struct airplay_stream_config *cfg)
     wrtc_options.video_encoder_preference =
         map_video_encoder_preference(cfg->video_encoder_preference);
 
-    fprintf(stdout, "[AirPlay] Creating WebRTC output on port %d...\n", cfg->webrtc_port);
-    fflush(stdout);
     ctx->webrtc = webrtc_output_create_with_options(cfg->webrtc_port,
                                                     &wrtc_options);
     if (!ctx->webrtc) {

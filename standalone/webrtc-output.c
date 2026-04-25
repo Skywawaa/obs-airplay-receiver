@@ -578,6 +578,8 @@ static void transcode_process_video(struct webrtc_output *out,
  */
 static bool http_get_rtp_params(int port, int *video_port, int *audio_port)
 {
+    fprintf(stdout, "[WebRTC] http_get_rtp_params: creating socket...\n");
+    fflush(stdout);
     sock_t s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == INVALID_SOCK) return false;
 
@@ -598,7 +600,10 @@ static bool http_get_rtp_params(int port, int *video_port, int *audio_port)
     addr.sin_port        = htons((unsigned short)port);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); /* 127.0.0.1 */
 
+    fprintf(stdout, "[WebRTC] http_get_rtp_params: connecting to 127.0.0.1:%d...\n", port);
+    fflush(stdout);
     if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        fprintf(stdout, "[WebRTC] connect failed\n");
         sock_close(s);
         return false;
     }
@@ -608,6 +613,8 @@ static bool http_get_rtp_params(int port, int *video_port, int *audio_port)
         "Host: 127.0.0.1\r\n"
         "Connection: close\r\n"
         "\r\n";
+    fprintf(stdout, "[WebRTC] sending request...\n");
+    fflush(stdout);
     if (send(s, req, (int)strlen(req), 0) < 0) {
         sock_close(s);
         return false;
@@ -622,18 +629,28 @@ static bool http_get_rtp_params(int port, int *video_port, int *audio_port)
         total += r;
     sock_close(s);
 
-    if (total <= 0) return false;
+    if (total <= 0) {
+        fprintf(stdout, "[WebRTC] recv returned %d\n", total);
+        return false;
+    }
     buf[total] = '\0';
+    fprintf(stdout, "[WebRTC] response (%d bytes): %.200s\n", total, buf);
 
     /* Skip HTTP headers */
     char *body = strstr(buf, "\r\n\r\n");
-    if (!body) return false;
+    if (!body) {
+        fprintf(stdout, "[WebRTC] no HTTP body found\n");
+        return false;
+    }
     body += 4;
 
     /* Minimal JSON extraction: find "videoPort": N and "audioPort": N */
     const char *vp = strstr(body, "\"videoPort\"");
     const char *ap = strstr(body, "\"audioPort\"");
-    if (!vp || !ap) return false;
+    if (!vp || !ap) {
+        fprintf(stdout, "[WebRTC] videoPort/audioPort not found in body\n");
+        return false;
+    }
 
     vp = strchr(vp, ':');
     ap = strchr(ap, ':');
@@ -641,7 +658,10 @@ static bool http_get_rtp_params(int port, int *video_port, int *audio_port)
 
     int v = atoi(vp + 1);
     int a = atoi(ap + 1);
-    if (v <= 0 || a <= 0) return false;
+    if (v <= 0 || a <= 0) {
+        fprintf(stdout, "[WebRTC] invalid ports v=%d a=%d\n", v, a);
+        return false;
+    }
 
     *video_port = v;
     *audio_port = a;
@@ -904,8 +924,6 @@ static void rtp_send_h264(struct webrtc_output *out,
 
 static bool opus_encoder_init(struct webrtc_output *out)
 {
-    fprintf(stdout, "[WebRTC] opus_encoder_init: finding Opus encoder...\n");
-    fflush(stdout);
     /* Prefer built-in Opus first for maximum runtime compatibility.
      * Some shared FFmpeg bundles expose libopus wrapper with extra deps. */
     out->opus_codec = avcodec_find_encoder(AV_CODEC_ID_OPUS);
@@ -916,13 +934,9 @@ static bool opus_encoder_init(struct webrtc_output *out)
         return false;
     }
 
-    fprintf(stdout, "[WebRTC] opus_encoder_init: allocating context...\n");
-    fflush(stdout);
     out->opus_ctx = avcodec_alloc_context3(out->opus_codec);
     if (!out->opus_ctx) return false;
 
-    fprintf(stdout, "[WebRTC] opus_encoder_init: configuring...\n");
-    fflush(stdout);
     out->opus_ctx->sample_rate = OPUS_SAMPLE_RATE;
     out->opus_ctx->sample_fmt  = AV_SAMPLE_FMT_FLT;
     av_channel_layout_default(&out->opus_ctx->ch_layout, OPUS_CHANNELS);
@@ -933,16 +947,12 @@ static bool opus_encoder_init(struct webrtc_output *out)
      * Keep startup robust by only setting optional tuning when available. */
     /* Optional encoder tuning can be build-dependent; keep startup robust. */
 
-    fprintf(stdout, "[WebRTC] opus_encoder_init: opening encoder...\n");
-    fflush(stdout);
     if (avcodec_open2(out->opus_ctx, out->opus_codec, NULL) < 0) {
         fprintf(stderr, "[WebRTC] Failed to open Opus encoder\n");
         avcodec_free_context(&out->opus_ctx);
         return false;
     }
 
-    fprintf(stdout, "[WebRTC] opus_encoder_init: allocating frame/packet...\n");
-    fflush(stdout);
     out->opus_frame = av_frame_alloc();
     out->opus_pkt   = av_packet_alloc();
     if (!out->opus_frame || !out->opus_pkt) goto fail_enc;
@@ -1080,8 +1090,14 @@ static void connect_thread(void *arg)
         }
 
         int vport = 0, aport = 0;
-        if (!http_get_rtp_params(out->mediasoup_port, &vport, &aport))
+        fprintf(stdout, "[WebRTC] Trying HTTP GET /rtp-params...\n");
+        fflush(stdout);
+        if (!http_get_rtp_params(out->mediasoup_port, &vport, &aport)) {
+            fprintf(stdout, "[WebRTC] HTTP GET failed, retrying...\n");
+            fflush(stdout);
             continue;
+        }
+        fprintf(stdout, "[WebRTC] Got ports: video=%d, audio=%d\n", vport, aport);
 
         /* Create UDP sockets */
         sock_t vs = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -1199,23 +1215,19 @@ struct webrtc_output *webrtc_output_create_with_options(
 
     fprintf(stdout, "[WebRTC] Initializing Opus encoder...\n");
     fflush(stdout);
-    /* Skip Opus encoder init for debugging - audio disabled by default for debug
-    out->opus_disabled = true;
-    if (!opus_encoder_init(out)) {
+    /* Check if audio is disabled via env var */
+    if (getenv("AIRPLAY_NO_AUDIO") != NULL) {
         out->opus_disabled = true;
-        fprintf(stderr,
-                "[WebRTC] Warning: Opus init failed at startup, continuing without audio\n");
-        fflush(stderr);
+    } else {
+        if (!opus_encoder_init(out)) {
+            out->opus_disabled = true;
+            fprintf(stderr,
+                    "[WebRTC] Warning: Opus init failed at startup, continuing without audio\n");
+            fflush(stderr);
+        }
     }
-    */
-    fprintf(stdout, "[WebRTC] Opus encoder: disabled for debug\n");
-    out->opus_disabled = true;
 
     fprintf(stdout, "[WebRTC] Starting connect thread...\n");
-    fflush(stdout);
-    /* Skip Opus encoder init for debugging - audio disabled */
-    out->opus_disabled = true;
-    fprintf(stdout, "[WebRTC] Opus encoder: disabled for debug\n");
     fflush(stdout);
 
     /* Start background thread to connect to mediasoup */
