@@ -39,9 +39,12 @@
 #  define getpid _getpid
 #  define SLEEP_MS(ms) Sleep(ms)
 #else
+#  include <pthread.h>
 #  include <unistd.h>
 #  define SLEEP_MS(ms) usleep((ms)*1000)
 #endif
+
+#define KEYFRAME_REFRESH_INTERVAL_MS 5000
 
 /* ------------------------------------------------------------------ */
 /* Internal state                                                       */
@@ -63,6 +66,7 @@ struct airplay_ctx {
     struct webrtc_output *webrtc;
     struct audio_dec adec;
     int              open_connections;
+    volatile bool    running;
 };
 
 /* Single global instance (one server per process) */
@@ -86,6 +90,32 @@ static void parse_hw_addr(const char *str, char *hw, int *hw_len)
     *hw_len = 0;
     for (size_t i = 0; i < strlen(str) && *hw_len < 6; i += 3)
         hw[(*hw_len)++] = (char)strtol(str + i, NULL, 16);
+}
+
+#ifdef _WIN32
+static DWORD WINAPI keyframe_refresh_thread(LPVOID arg)
+#else
+static void *keyframe_refresh_thread(void *arg)
+#endif
+{
+    struct airplay_ctx *ctx = (struct airplay_ctx *)arg;
+
+    while (ctx->running) {
+        SLEEP_MS(KEYFRAME_REFRESH_INTERVAL_MS);
+        if (!ctx->running)
+            break;
+
+        /* UxPlay may provide only one IDR at session start.
+         * Periodically request reinjection so new viewers/reloads can sync. */
+        if (ctx->open_connections > 0 && ctx->webrtc)
+            webrtc_output_request_keyframe(ctx->webrtc);
+    }
+
+#ifdef _WIN32
+    return 0;
+#else
+    return NULL;
+#endif
 }
 
 /* ------------------------------------------------------------------ */
@@ -453,6 +483,28 @@ bool airplay_stream_start(const struct airplay_stream_config *cfg)
             "[AirPlay] Server '%s' ready — mirror from your Apple device\n",
             cfg->server_name);
 
+    ctx->running = true;
+#ifdef _WIN32
+    {
+        HANDLE refresh_thread =
+            CreateThread(NULL, 0, keyframe_refresh_thread, ctx, 0, NULL);
+        if (refresh_thread) {
+            CloseHandle(refresh_thread);
+        } else {
+            fprintf(stderr, "[AirPlay] Warning: keyframe refresh thread not started\n");
+        }
+    }
+#else
+    {
+        pthread_t refresh_thread;
+        if (pthread_create(&refresh_thread, NULL, keyframe_refresh_thread, ctx) == 0) {
+            pthread_detach(refresh_thread);
+        } else {
+            fprintf(stderr, "[AirPlay] Warning: keyframe refresh thread not started\n");
+        }
+    }
+#endif
+
     g_ctx = ctx;
     return true;
 
@@ -470,6 +522,7 @@ void airplay_stream_stop(void)
     struct airplay_ctx *ctx = g_ctx;
     if (!ctx) return;
     g_ctx = NULL;
+    ctx->running = false;
 
     fprintf(stdout, "[AirPlay] Stopping…\n");
 
