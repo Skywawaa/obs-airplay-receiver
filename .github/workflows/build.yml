@@ -513,7 +513,7 @@ jobs:
               break
             }
             catch {
-              Write-Warning "OBS download failed on attempt $i: $($_.Exception.Message)"
+              Write-Warning "OBS download failed on attempt ${i}: $($_.Exception.Message)"
               if ($i -lt $attempts) {
                 $sleepSec = [Math]::Min(60, 5 * $i)
                 Write-Host "Retrying in $sleepSec seconds..."
