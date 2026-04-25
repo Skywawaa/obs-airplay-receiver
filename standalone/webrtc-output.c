@@ -958,10 +958,8 @@ static bool opus_encoder_init(struct webrtc_output *out)
     out->opus_sample_fmt    = out->opus_ctx->sample_fmt;
     int actual_frame_size = out->opus_ctx->frame_size;
 
-    fprintf(stdout, "[WebRTC] Opus open OK: fmt=%d (%s) frame_size=%d\n",
-            (int)out->opus_sample_fmt,
-            av_get_sample_fmt_name(out->opus_sample_fmt),
-            actual_frame_size);
+    fprintf(stdout, "[WebRTC] Opus open OK: fmt=%d frame_size=%d\n",
+            (int)out->opus_sample_fmt, actual_frame_size);
     fflush(stdout);
 
     out->opus_frame = av_frame_alloc();
@@ -976,29 +974,73 @@ static bool opus_encoder_init(struct webrtc_output *out)
     out->opus_frame->format      = (int)out->opus_sample_fmt;
     av_channel_layout_default(&out->opus_frame->ch_layout, OPUS_CHANNELS);
 
-    {
-        uint8_t *plane_data[OPUS_CHANNELS];
-        int linesize = 0;
-        int alloc_ret = av_samples_alloc(plane_data, &linesize,
-                                          OPUS_CHANNELS, actual_frame_size,
-                                          out->opus_sample_fmt, 32);
-        if (alloc_ret < 0) {
-            fprintf(stderr, "[WebRTC] av_samples_alloc (Opus) failed: %d\n",
-                    alloc_ret);
-            goto fail;
-        }
-        for (int i = 0; i < OPUS_CHANNELS; i++)
-            out->opus_frame->data[i] = plane_data[i];
-        out->opus_frame->linesize[0] = linesize;
-
-        out->opus_frame->buf[0] = av_buffer_create(
-            plane_data[0], (size_t)alloc_ret,
-            av_buffer_default_free, NULL, 0);
-        if (!out->opus_frame->buf[0]) {
-            av_freep(&plane_data[0]);
-            goto fail;
-        }
+    if (av_frame_get_buffer(out->opus_frame, 0) < 0) {
+        fprintf(stderr, "[WebRTC] av_frame_get_buffer (Opus) failed\n");
+        goto fail;
     }
+
+    fprintf(stdout, "[WebRTC] Opus encoder ready: %s\n", out->opus_codec->name);
+    fflush(stdout);
+    return true;
+
+fail:
+    if (out->opus_frame) av_frame_free(&out->opus_frame);
+    if (out->opus_pkt)   av_packet_free(&out->opus_pkt);
+    if (out->opus_ctx) {
+        avcodec_send_frame(out->opus_ctx, NULL);
+        avcodec_free_context(&out->opus_ctx);
+    }
+    return false;
+}
+
+    out->opus_ctx = avcodec_alloc_context3(out->opus_codec);
+    if (!out->opus_ctx) return false;
+
+    out->opus_ctx->sample_rate = OPUS_SAMPLE_RATE;
+    out->opus_ctx->bit_rate    = 64000;
+    av_channel_layout_default(&out->opus_ctx->ch_layout, OPUS_CHANNELS);
+
+    out->opus_ctx->sample_fmt = AV_SAMPLE_FMT_FLT;
+
+    fprintf(stdout, "[WebRTC] Opening Opus encoder (%s)...\n",
+            out->opus_codec->name);
+    fflush(stdout);
+
+    if (avcodec_open2(out->opus_ctx, out->opus_codec, NULL) < 0) {
+        fprintf(stderr, "[WebRTC] avcodec_open2 (Opus) failed\n");
+        avcodec_free_context(&out->opus_ctx);
+        return false;
+    }
+
+    out->opus_sample_fmt    = out->opus_ctx->sample_fmt;
+    int actual_frame_size = out->opus_ctx->frame_size;
+
+    fprintf(stdout, "[WebRTC] Opus open OK: fmt=%d frame_size=%d\n",
+            (int)out->opus_sample_fmt, actual_frame_size);
+    fflush(stdout);
+
+    out->opus_frame = av_frame_alloc();
+    out->opus_pkt   = av_packet_alloc();
+    if (!out->opus_frame || !out->opus_pkt) {
+        fprintf(stderr, "[WebRTC] av_frame/pkt alloc failed\n");
+        goto fail;
+    }
+
+    out->opus_frame->nb_samples  = actual_frame_size;
+    out->opus_frame->sample_rate = OPUS_SAMPLE_RATE;
+    out->opus_frame->format      = (int)out->opus_sample_fmt;
+    av_channel_layout_default(&out->opus_frame->ch_layout, OPUS_CHANNELS);
+
+    int samples_bytes = actual_frame_size * OPUS_CHANNELS *
+            av_get_bytes_per_sample(out->opus_sample_fmt);
+    uint8_t *audio_data = av_malloc((size_t)samples_bytes);
+    if (!audio_data) {
+        fprintf(stderr, "[WebRTC] av_malloc for audio failed\n");
+        goto fail;
+    }
+    out->opus_frame->data[0] = audio_data;
+    out->opus_frame->buf[0] = av_buffer_create(audio_data, (size_t)samples_bytes,
+            av_buffer_default_free, NULL, 0);
 
     fprintf(stdout, "[WebRTC] Opus encoder ready: %s\n", out->opus_codec->name);
     fflush(stdout);
