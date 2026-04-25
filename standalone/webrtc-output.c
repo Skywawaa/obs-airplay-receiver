@@ -57,34 +57,46 @@ static void mutex_lock(wrtc_mutex_t *m)    { EnterCriticalSection(m); }
 static void mutex_unlock(wrtc_mutex_t *m)  { LeaveCriticalSection(m); }
 static void mutex_destroy(wrtc_mutex_t *m) { DeleteCriticalSection(m); }
 
-static LONG WINAPI thread_exception_filter(LPEXCEPTION_POINTERS info)
-{
-    fprintf(stderr, "[ERROR] Exception in background thread: code=0x%08lx\n",
-            info ? info->ExceptionRecord->ExceptionCode : 0);
-    fflush(stderr);
-    return EXCEPTION_EXECUTE_HANDLER;
-}
+struct thread_trampoline {
+    void (*fn)(void *);
+    void *arg;
+};
 
-static void thread_wrapper(void (*fn)(void *), void *arg)
+static void __cdecl thread_entry(void *raw)
 {
+    struct thread_trampoline *t = (struct thread_trampoline *)raw;
+    void (*fn)(void *) = t->fn;
+    void *arg          = t->arg;
+    free(t);
+
     fprintf(stderr, "[WebRTC] thread_wrapper: before __try\n");
     fflush(stderr);
     __try {
-        fprintf(stderr, "[WebRTC] thread_wrapper: calling fn(arg=%p)\n", arg);
+        fprintf(stderr, "[WebRTC] thread_wrapper: calling fn\n");
         fflush(stderr);
         fn(arg);
         fprintf(stderr, "[WebRTC] thread_wrapper: fn returned\n");
         fflush(stderr);
     } __except(EXCEPTION_EXECUTE_HANDLER) {
-        fprintf(stderr, "[WebRTC] thread_wrapper: caught exception, continuing\n");
+        fprintf(stderr, "[ERROR] Exception in background thread: code=0x%08lx\n",
+                GetExceptionCode());
         fflush(stderr);
     }
 }
 
-static void thread_start(void (*fn)(void *), void *arg) {
-    uintptr_t rc = _beginthread((_beginthread_proc_type)thread_wrapper, 0, arg);
+static void thread_start(void (*fn)(void *), void *arg)
+{
+    struct thread_trampoline *t = malloc(sizeof(*t));
+    if (!t) {
+        fprintf(stderr, "[ERROR] thread_start: out of memory\n");
+        return;
+    }
+    t->fn  = fn;
+    t->arg = arg;
+    uintptr_t rc = _beginthread(thread_entry, 0, t);
     if (rc == (uintptr_t)(-1L)) {
-        fprintf(stderr, "[ERROR] _beginthread failed: unable to start thread\n");
+        fprintf(stderr, "[ERROR] _beginthread failed\n");
+        free(t);
     }
 }
 
@@ -586,8 +598,6 @@ static void transcode_process_video(struct webrtc_output *out,
  */
 static bool http_get_rtp_params(int port, int *video_port, int *audio_port)
 {
-    fprintf(stdout, "[WebRTC] http_get_rtp_params: creating socket...\n");
-    fflush(stdout);
     sock_t s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == INVALID_SOCK) return false;
 
@@ -608,10 +618,7 @@ static bool http_get_rtp_params(int port, int *video_port, int *audio_port)
     addr.sin_port        = htons((unsigned short)port);
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK); /* 127.0.0.1 */
 
-    fprintf(stdout, "[WebRTC] http_get_rtp_params: connecting to 127.0.0.1:%d...\n", port);
-    fflush(stdout);
     if (connect(s, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
-        fprintf(stdout, "[WebRTC] connect failed\n");
         sock_close(s);
         return false;
     }
@@ -621,8 +628,6 @@ static bool http_get_rtp_params(int port, int *video_port, int *audio_port)
         "Host: 127.0.0.1\r\n"
         "Connection: close\r\n"
         "\r\n";
-    fprintf(stdout, "[WebRTC] sending request...\n");
-    fflush(stdout);
     if (send(s, req, (int)strlen(req), 0) < 0) {
         sock_close(s);
         return false;
@@ -637,28 +642,18 @@ static bool http_get_rtp_params(int port, int *video_port, int *audio_port)
         total += r;
     sock_close(s);
 
-    if (total <= 0) {
-        fprintf(stdout, "[WebRTC] recv returned %d\n", total);
-        return false;
-    }
+    if (total <= 0) return false;
     buf[total] = '\0';
-    fprintf(stdout, "[WebRTC] response (%d bytes): %.200s\n", total, buf);
 
     /* Skip HTTP headers */
     char *body = strstr(buf, "\r\n\r\n");
-    if (!body) {
-        fprintf(stdout, "[WebRTC] no HTTP body found\n");
-        return false;
-    }
+    if (!body) return false;
     body += 4;
 
     /* Minimal JSON extraction: find "videoPort": N and "audioPort": N */
     const char *vp = strstr(body, "\"videoPort\"");
     const char *ap = strstr(body, "\"audioPort\"");
-    if (!vp || !ap) {
-        fprintf(stdout, "[WebRTC] videoPort/audioPort not found in body\n");
-        return false;
-    }
+    if (!vp || !ap) return false;
 
     vp = strchr(vp, ':');
     ap = strchr(ap, ':');
@@ -1078,35 +1073,27 @@ shift:
  */
 static void connect_thread(void *arg)
 {
-    fprintf(stderr, "[WebRTC] connect_thread: entered\n");
-    fflush(stderr);
-
     struct webrtc_output *out = (struct webrtc_output *)arg;
-    int port = out->mediasoup_port;
-    fprintf(stderr, "[WebRTC] connect_thread: out=%p, port=%d\n", (void*)out, port);
-    fflush(stderr);
 
-    /* Use stderr for immediate output */
-    fprintf(stderr, "[WebRTC] connect_thread: starting (port=%d)\n", port);
-    fflush(stderr);
+    fprintf(stdout,
+            "[WebRTC] Waiting for mediasoup server on port %d …\n",
+            out->mediasoup_port);
+    fflush(stdout);
 
     for (int tries = 0; out->running; tries++) {
         if (tries > 0) SLEEP_MS(1000);
         if (tries >= CONNECT_MAX_TRIES) {
-            fprintf(stderr, "[WebRTC] timeout after %d tries\n", tries);
+            fprintf(stderr,
+                    "[WebRTC] mediasoup server not reachable after %d seconds"
+                    " — still retrying\n",
+                    tries);
             fflush(stderr);
             tries = 0;
         }
 
         int vport = 0, aport = 0;
-        fprintf(stderr, "[WebRTC] http_get_rtp_params...\n");
-        fflush(stderr);
-        if (!http_get_rtp_params(port, &vport, &aport)) {
-            fprintf(stderr, "[WebRTC] http failed\n");
-            fflush(stderr);
+        if (!http_get_rtp_params(out->mediasoup_port, &vport, &aport))
             continue;
-        }
-        fprintf(stdout, "[WebRTC] Got ports: video=%d, audio=%d\n", vport, aport);
 
         /* Create UDP sockets */
         sock_t vs = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -1224,8 +1211,11 @@ struct webrtc_output *webrtc_output_create_with_options(
 
     fprintf(stdout, "[WebRTC] Initializing Opus encoder...\n");
     fflush(stdout);
-    out->opus_disabled = true;
-    fprintf(stdout, "[WebRTC] Opus encoder: disabled (not supported)\n");
+    /* Try Opus encoder init */
+    if (!opus_encoder_init(out)) {
+        out->opus_disabled = true;
+        fprintf(stdout, "[WebRTC] Opus encoder: disabled (not supported)\n");
+    }
 
     fprintf(stdout, "[WebRTC] Starting connect thread...\n");
     fflush(stdout);
@@ -1250,6 +1240,7 @@ void webrtc_output_destroy(struct webrtc_output *out)
     if (!out) return;
 
     out->running = false;
+    SLEEP_MS(1500);  /* wait for connect thread's sleep */
 
     mutex_lock(&out->lock);
     if (out->video_sock != INVALID_SOCK) {

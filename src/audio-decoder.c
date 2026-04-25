@@ -196,10 +196,11 @@ bool audio_decoder_decode(struct audio_decoder *dec, const uint8_t *aac_data,
 	/* Ensure output buffer is large enough */
 	size_t needed = samples * channels * sizeof(float);
 	if (needed > dec->pcm_buf_size) {
-		dec->pcm_buf_size = needed;
-		dec->pcm_buf = realloc(dec->pcm_buf, dec->pcm_buf_size);
-		if (!dec->pcm_buf)
+		float *tmp = realloc(dec->pcm_buf, needed);
+		if (!tmp)
 			return false;
+		dec->pcm_buf      = tmp;
+		dec->pcm_buf_size = needed;
 	}
 
 	/* Convert to interleaved float32 */

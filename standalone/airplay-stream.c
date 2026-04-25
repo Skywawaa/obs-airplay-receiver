@@ -294,9 +294,10 @@ static int adec_decode(struct audio_dec *d,
     /* Ensure output buffer is large enough */
     size_t needed = (size_t)(samples * ch) * sizeof(float);
     if (needed > d->pcm_buf_size) {
+        float *tmp = (float *)realloc(d->pcm_buf, needed);
+        if (!tmp) return 0;
+        d->pcm_buf      = tmp;
         d->pcm_buf_size = needed;
-        d->pcm_buf = (float *)realloc(d->pcm_buf, d->pcm_buf_size);
-        if (!d->pcm_buf) return 0;
     }
 
     uint8_t *out_ptr = (uint8_t *)d->pcm_buf;
