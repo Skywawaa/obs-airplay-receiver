@@ -38,6 +38,7 @@
 #  include <ws2tcpip.h>
 #  include <windows.h>
 #  include <process.h>
+#  include <debugapi.h>
 
 typedef SOCKET sock_t;
 #  define INVALID_SOCK  INVALID_SOCKET
@@ -56,8 +57,24 @@ static void mutex_lock(wrtc_mutex_t *m)    { EnterCriticalSection(m); }
 static void mutex_unlock(wrtc_mutex_t *m)  { LeaveCriticalSection(m); }
 static void mutex_destroy(wrtc_mutex_t *m) { DeleteCriticalSection(m); }
 
+static LONG WINAPI thread_exception_filter(LPEXCEPTION_POINTERS info)
+{
+    fprintf(stderr, "[ERROR] Exception in background thread: code=0x%08lx\n",
+            info ? info->ExceptionRecord->ExceptionCode : 0);
+    fflush(stderr);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+static void thread_wrapper(void (*fn)(void *), void *arg)
+{
+    __try {
+        fn(arg);
+    } __except(thread_exception_filter(GetExceptionInformation())) {
+    }
+}
+
 static void thread_start(void (*fn)(void *), void *arg) {
-    uintptr_t rc = _beginthread((_beginthread_proc_type)fn, 0, arg);
+    uintptr_t rc = _beginthread((_beginthread_proc_type)thread_wrapper, 0, arg);
     if (rc == (uintptr_t)(-1L)) {
         fprintf(stderr, "[ERROR] _beginthread failed: unable to start thread\n");
     }
