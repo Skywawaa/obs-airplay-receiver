@@ -32,6 +32,26 @@
 
 struct webrtc_output;
 
+typedef enum webrtc_video_mode {
+    WEBRTC_VIDEO_MODE_PASSTHROUGH = 0,
+    WEBRTC_VIDEO_MODE_TRANSCODE_AUTO = 1,
+} webrtc_video_mode_t;
+
+typedef enum webrtc_video_encoder_preference {
+    WEBRTC_VIDEO_ENCODER_AUTO = 0,
+    WEBRTC_VIDEO_ENCODER_NVENC,
+    WEBRTC_VIDEO_ENCODER_QSV,
+    WEBRTC_VIDEO_ENCODER_AMF,
+    WEBRTC_VIDEO_ENCODER_VIDEOTOOLBOX,
+    WEBRTC_VIDEO_ENCODER_LIBX264,
+    WEBRTC_VIDEO_ENCODER_SOFTWARE,
+} webrtc_video_encoder_preference_t;
+
+struct webrtc_output_options {
+    webrtc_video_mode_t video_mode;
+    webrtc_video_encoder_preference_t video_encoder_preference;
+};
+
 /*
  * Create the mediasoup RTP output.  mediasoup_port is the HTTP port of the
  * mediasoup signalling server (e.g. 8888 — the same port you open in the
@@ -40,6 +60,14 @@ struct webrtc_output;
  * Returns NULL on failure.
  */
 struct webrtc_output *webrtc_output_create(int mediasoup_port);
+
+/*
+ * Extended create function with video mode and encoder preferences.
+ * Keeps passthrough as a fallback if transcode is unavailable.
+ */
+struct webrtc_output *webrtc_output_create_with_options(
+    int mediasoup_port,
+    const struct webrtc_output_options *options);
 
 /*
  * Shut down and free all resources.

@@ -8,6 +8,21 @@
 
 #include <stdbool.h>
 
+typedef enum airplay_video_mode {
+    AIRPLAY_VIDEO_MODE_PASSTHROUGH = 0,
+    AIRPLAY_VIDEO_MODE_TRANSCODE_AUTO = 1,
+} airplay_video_mode_t;
+
+typedef enum airplay_video_encoder_preference {
+    AIRPLAY_VIDEO_ENCODER_AUTO = 0,
+    AIRPLAY_VIDEO_ENCODER_NVENC,
+    AIRPLAY_VIDEO_ENCODER_QSV,
+    AIRPLAY_VIDEO_ENCODER_AMF,
+    AIRPLAY_VIDEO_ENCODER_VIDEOTOOLBOX,
+    AIRPLAY_VIDEO_ENCODER_LIBX264,
+    AIRPLAY_VIDEO_ENCODER_SOFTWARE,
+} airplay_video_encoder_preference_t;
+
 struct airplay_stream_config {
     /* AirPlay server advertisement name (shows on Apple device) */
     char server_name[256];
@@ -26,6 +41,12 @@ struct airplay_stream_config {
 
     /* Requested frame rate (0 = unlimited) */
     int  fps;
+
+    /* Video forwarding mode: passthrough or auto-transcode preparation. */
+    airplay_video_mode_t video_mode;
+
+    /* Preferred H264 encoder for transcode-auto mode. */
+    airplay_video_encoder_preference_t video_encoder_preference;
 
     /*
      * Enable hardware-accelerated audio decode via Windows Media Foundation

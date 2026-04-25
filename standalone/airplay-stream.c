@@ -88,6 +88,81 @@ static void parse_hw_addr(const char *str, char *hw, int *hw_len)
         hw[(*hw_len)++] = (char)strtol(str + i, NULL, 16);
 }
 
+/* Log local encoder capabilities for future low-latency transcode mode.
+ * This checks FFmpeg encoder availability in the current build/runtime. */
+static void log_video_encoder_capabilities(void)
+{
+    const AVCodec *enc_nvenc = avcodec_find_encoder_by_name("h264_nvenc");
+    const AVCodec *enc_qsv   = avcodec_find_encoder_by_name("h264_qsv");
+    const AVCodec *enc_amf   = avcodec_find_encoder_by_name("h264_amf");
+    const AVCodec *enc_vtb   = avcodec_find_encoder_by_name("h264_videotoolbox");
+    const AVCodec *enc_x264  = avcodec_find_encoder_by_name("libx264");
+    const AVCodec *enc_sw    = avcodec_find_encoder(AV_CODEC_ID_H264);
+
+    fprintf(stdout,
+            "[Video] H264 encoder availability: NVENC=%s QSV=%s AMF=%s VTB=%s "
+            "libx264=%s software=%s\n",
+            enc_nvenc ? "yes" : "no",
+            enc_qsv   ? "yes" : "no",
+            enc_amf   ? "yes" : "no",
+            enc_vtb   ? "yes" : "no",
+            enc_x264  ? "yes" : "no",
+            enc_sw    ? "yes" : "no");
+
+    if (enc_nvenc) {
+        fprintf(stdout,
+                "[Video] Preferred hardware encoder candidate: h264_nvenc\n");
+    } else if (enc_qsv) {
+        fprintf(stdout,
+                "[Video] Preferred hardware encoder candidate: h264_qsv\n");
+    } else if (enc_amf) {
+        fprintf(stdout,
+                "[Video] Preferred hardware encoder candidate: h264_amf\n");
+    } else if (enc_vtb) {
+        fprintf(stdout,
+                "[Video] Preferred hardware encoder candidate: h264_videotoolbox\n");
+    } else if (enc_x264 || enc_sw) {
+        fprintf(stdout,
+                "[Video] No hardware H264 encoder detected; software encode fallback will be used.\n");
+    } else {
+        fprintf(stdout,
+                "[Video] No H264 encoder detected in FFmpeg build.\n");
+    }
+}
+
+static webrtc_video_mode_t map_video_mode(airplay_video_mode_t mode)
+{
+    switch (mode) {
+    case AIRPLAY_VIDEO_MODE_TRANSCODE_AUTO:
+        return WEBRTC_VIDEO_MODE_TRANSCODE_AUTO;
+    case AIRPLAY_VIDEO_MODE_PASSTHROUGH:
+    default:
+        return WEBRTC_VIDEO_MODE_PASSTHROUGH;
+    }
+}
+
+static webrtc_video_encoder_preference_t map_video_encoder_preference(
+    airplay_video_encoder_preference_t pref)
+{
+    switch (pref) {
+    case AIRPLAY_VIDEO_ENCODER_NVENC:
+        return WEBRTC_VIDEO_ENCODER_NVENC;
+    case AIRPLAY_VIDEO_ENCODER_QSV:
+        return WEBRTC_VIDEO_ENCODER_QSV;
+    case AIRPLAY_VIDEO_ENCODER_AMF:
+        return WEBRTC_VIDEO_ENCODER_AMF;
+    case AIRPLAY_VIDEO_ENCODER_VIDEOTOOLBOX:
+        return WEBRTC_VIDEO_ENCODER_VIDEOTOOLBOX;
+    case AIRPLAY_VIDEO_ENCODER_LIBX264:
+        return WEBRTC_VIDEO_ENCODER_LIBX264;
+    case AIRPLAY_VIDEO_ENCODER_SOFTWARE:
+        return WEBRTC_VIDEO_ENCODER_SOFTWARE;
+    case AIRPLAY_VIDEO_ENCODER_AUTO:
+    default:
+        return WEBRTC_VIDEO_ENCODER_AUTO;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Audio decoder lifecycle                                              */
 /* ------------------------------------------------------------------ */
@@ -354,6 +429,8 @@ bool airplay_stream_start(const struct airplay_stream_config *cfg)
     WSAStartup(MAKEWORD(2, 2), &wsa);
 #endif
 
+    log_video_encoder_capabilities();
+
     struct airplay_ctx *ctx =
         (struct airplay_ctx *)calloc(1, sizeof(struct airplay_ctx));
     if (!ctx) return false;
@@ -365,7 +442,13 @@ bool airplay_stream_start(const struct airplay_stream_config *cfg)
     }
 
     /* Create WebRTC output (connects to mediasoup SFU) */
-    ctx->webrtc = webrtc_output_create(cfg->webrtc_port);
+    struct webrtc_output_options wrtc_options;
+    wrtc_options.video_mode = map_video_mode(cfg->video_mode);
+    wrtc_options.video_encoder_preference =
+        map_video_encoder_preference(cfg->video_encoder_preference);
+
+    ctx->webrtc = webrtc_output_create_with_options(cfg->webrtc_port,
+                                                    &wrtc_options);
     if (!ctx->webrtc) {
         fprintf(stderr, "[AirPlay] Failed to start WebRTC server on port %d\n",
                 cfg->webrtc_port);

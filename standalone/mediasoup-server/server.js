@@ -80,6 +80,10 @@ let videoProducer;
 let audioProducer;
 let connectedBrowsers = 0;
 let viewerKeyframeNeeded = false;
+let lastViewerReadyMs = 0;
+
+/* Avoid duplicate keyframe requests fired during reload reconnect storms. */
+const VIEWER_READY_DEBOUNCE_MS = 1200;
 
 /* ------------------------------------------------------------------ */
 /* mediasoup initialisation                                             */
@@ -320,8 +324,13 @@ async function startServer() {
     /* Keyframe request endpoint — called by browser after consumer created,
      * polled by C sender via /keyframe-needed. */
     app.get('/viewer-ready', (_req, res) => {
-        viewerKeyframeNeeded = true;
-        res.json({ ok: true });
+        const now = Date.now();
+        const accepted = (now - lastViewerReadyMs) >= VIEWER_READY_DEBOUNCE_MS;
+        if (accepted) {
+            viewerKeyframeNeeded = true;
+            lastViewerReadyMs = now;
+        }
+        res.json({ ok: true, accepted });
     });
 
     /* Keyframe-needed endpoint — polled by airplay-stream.exe.

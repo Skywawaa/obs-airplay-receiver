@@ -154,11 +154,12 @@ static void thread_start(void (*fn)(void *), void *arg) {
 #define CONNECT_MAX_TRIES 120
 
 /*
- * Maximum age for a cached IDR that can be safely re-injected for a new
- * viewer. AirPlay screen capture typically has GOPs of 2-5 seconds.
- * Allow up to 10 seconds to cover normal reload/reconnect scenarios.
+ * Maximum age for cached IDR reinjection.
+ * If too old, reinjecting only the IDR (without all intermediate P-frames)
+ * can produce macroblock noise/artifacts after reload. In that case, wait
+ * for a natural fresh IDR from the source.
  */
-#define KEYFRAME_CACHE_MAX_AGE_US 10000000
+#define KEYFRAME_CACHE_MAX_AGE_US 500000
 
 /* ------------------------------------------------------------------ */
 /* State                                                                */
@@ -206,7 +207,68 @@ struct webrtc_output {
     uint64_t injected_keyframe_count;
     uint64_t idr_received_count;
     int64_t  last_idr_pts_us;
+
+    webrtc_video_mode_t video_mode;
+    webrtc_video_encoder_preference_t video_encoder_preference;
+    const AVCodec *selected_video_encoder;
+    bool transcode_warning_logged;
 };
+
+static const char *video_mode_name(webrtc_video_mode_t mode)
+{
+    switch (mode) {
+    case WEBRTC_VIDEO_MODE_TRANSCODE_AUTO: return "transcode-auto";
+    case WEBRTC_VIDEO_MODE_PASSTHROUGH:
+    default: return "passthrough";
+    }
+}
+
+static const char *video_encoder_pref_name(webrtc_video_encoder_preference_t pref)
+{
+    switch (pref) {
+    case WEBRTC_VIDEO_ENCODER_NVENC: return "nvenc";
+    case WEBRTC_VIDEO_ENCODER_QSV: return "qsv";
+    case WEBRTC_VIDEO_ENCODER_AMF: return "amf";
+    case WEBRTC_VIDEO_ENCODER_VIDEOTOOLBOX: return "videotoolbox";
+    case WEBRTC_VIDEO_ENCODER_LIBX264: return "libx264";
+    case WEBRTC_VIDEO_ENCODER_SOFTWARE: return "software";
+    case WEBRTC_VIDEO_ENCODER_AUTO:
+    default: return "auto";
+    }
+}
+
+static const AVCodec *find_video_encoder_by_preference(
+    webrtc_video_encoder_preference_t pref)
+{
+    switch (pref) {
+    case WEBRTC_VIDEO_ENCODER_NVENC:
+        return avcodec_find_encoder_by_name("h264_nvenc");
+    case WEBRTC_VIDEO_ENCODER_QSV:
+        return avcodec_find_encoder_by_name("h264_qsv");
+    case WEBRTC_VIDEO_ENCODER_AMF:
+        return avcodec_find_encoder_by_name("h264_amf");
+    case WEBRTC_VIDEO_ENCODER_VIDEOTOOLBOX:
+        return avcodec_find_encoder_by_name("h264_videotoolbox");
+    case WEBRTC_VIDEO_ENCODER_LIBX264:
+        return avcodec_find_encoder_by_name("libx264");
+    case WEBRTC_VIDEO_ENCODER_SOFTWARE:
+        return avcodec_find_encoder(AV_CODEC_ID_H264);
+    case WEBRTC_VIDEO_ENCODER_AUTO:
+    default: {
+        const AVCodec *enc = avcodec_find_encoder_by_name("h264_nvenc");
+        if (enc) return enc;
+        enc = avcodec_find_encoder_by_name("h264_qsv");
+        if (enc) return enc;
+        enc = avcodec_find_encoder_by_name("h264_amf");
+        if (enc) return enc;
+        enc = avcodec_find_encoder_by_name("h264_videotoolbox");
+        if (enc) return enc;
+        enc = avcodec_find_encoder_by_name("libx264");
+        if (enc) return enc;
+        return avcodec_find_encoder(AV_CODEC_ID_H264);
+    }
+    }
+}
 
 /* ------------------------------------------------------------------ */
 /* Simple HTTP GET helper (for /rtp-params)                            */
@@ -779,7 +841,9 @@ static void connect_thread(void *arg)
 /* Public API                                                           */
 /* ------------------------------------------------------------------ */
 
-struct webrtc_output *webrtc_output_create(int mediasoup_port)
+struct webrtc_output *webrtc_output_create_with_options(
+    int mediasoup_port,
+    const struct webrtc_output_options *options)
 {
     struct webrtc_output *out =
         (struct webrtc_output *)calloc(1, sizeof(struct webrtc_output));
@@ -789,6 +853,35 @@ struct webrtc_output *webrtc_output_create(int mediasoup_port)
     out->running        = true;
     out->video_sock     = INVALID_SOCK;
     out->audio_sock     = INVALID_SOCK;
+    out->video_mode     = WEBRTC_VIDEO_MODE_PASSTHROUGH;
+    out->video_encoder_preference = WEBRTC_VIDEO_ENCODER_AUTO;
+
+    if (options) {
+        out->video_mode = options->video_mode;
+        out->video_encoder_preference = options->video_encoder_preference;
+    }
+
+    if (out->video_mode == WEBRTC_VIDEO_MODE_TRANSCODE_AUTO) {
+        out->selected_video_encoder =
+            find_video_encoder_by_preference(out->video_encoder_preference);
+        if (out->selected_video_encoder) {
+            fprintf(stdout,
+                    "[WebRTC] Video mode=%s, encoder_pref=%s, selected=%s\n",
+                    video_mode_name(out->video_mode),
+                    video_encoder_pref_name(out->video_encoder_preference),
+                    out->selected_video_encoder->name);
+        } else {
+            fprintf(stdout,
+                    "[WebRTC] Video mode=%s requested but no H264 encoder found; "
+                    "falling back to passthrough\n",
+                    video_mode_name(out->video_mode));
+            out->video_mode = WEBRTC_VIDEO_MODE_PASSTHROUGH;
+        }
+    } else {
+        fprintf(stdout,
+                "[WebRTC] Video mode=%s\n",
+                video_mode_name(out->video_mode));
+    }
 
     mutex_init(&out->lock);
 
@@ -802,6 +895,14 @@ struct webrtc_output *webrtc_output_create(int mediasoup_port)
     thread_start(connect_thread, out);
 
     return out;
+}
+
+struct webrtc_output *webrtc_output_create(int mediasoup_port)
+{
+    struct webrtc_output_options defaults;
+    defaults.video_mode = WEBRTC_VIDEO_MODE_PASSTHROUGH;
+    defaults.video_encoder_preference = WEBRTC_VIDEO_ENCODER_AUTO;
+    return webrtc_output_create_with_options(mediasoup_port, &defaults);
 }
 
 void webrtc_output_destroy(struct webrtc_output *out)
@@ -833,6 +934,15 @@ void webrtc_output_write_video(struct webrtc_output *out,
                                int64_t pts_us)
 {
     if (!out || !data || size == 0) return;
+
+    if (out->video_mode == WEBRTC_VIDEO_MODE_TRANSCODE_AUTO &&
+        !out->transcode_warning_logged) {
+        out->transcode_warning_logged = true;
+        fprintf(stdout,
+                "[WebRTC] Transcode mode selected (%s) but transcode pipeline "
+                "is not enabled yet; using passthrough for now\n",
+                out->selected_video_encoder ? out->selected_video_encoder->name : "none");
+    }
 
     mutex_lock(&out->lock);
 
@@ -893,8 +1003,11 @@ void webrtc_output_write_video(struct webrtc_output *out,
         /* Inject a cached keyframe when a new viewer arrives and needs sync.
          * Use a short bounded burst to survive races or packet loss right after
          * reconnect, but stop quickly to avoid repeatedly flashing old content. */
+        int64_t cache_age_us = pts_us - out->keyframe_cache_pts_us;
+
         if ((out->needs_keyframe || out->pending_keyframe_burst > 0) &&
             out->keyframe_cache && out->keyframe_cache_size > 0 &&
+            cache_age_us >= 0 && cache_age_us <= KEYFRAME_CACHE_MAX_AGE_US &&
             (out->next_keyframe_burst_pts_us == 0 ||
              pts_us >= out->next_keyframe_burst_pts_us)) {
             uint32_t kf_ts = (ts >= H264_FRAME_TICKS)

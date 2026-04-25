@@ -80,6 +80,14 @@ static void print_usage(const char *prog)
         "  --width  <px>    Requested video width  (default: device native)\n"
         "  --height <px>    Requested video height (default: device native)\n"
         "  --fps    <fps>   Requested frame rate   (default: 60)\n"
+        "  --video-mode <mode>\n"
+        "                   Video path mode: passthrough | transcode-auto\n"
+        "                   (default: passthrough)\n"
+        "  --video-encoder <enc>\n"
+        "                   Preferred H264 encoder when --video-mode\n"
+        "                   transcode-auto is used:\n"
+        "                   auto | nvenc | qsv | amf | videotoolbox |\n"
+        "                   libx264 | software (default: auto)\n"
         "  --hw-accel       Enable hardware-accelerated audio codec\n"
         "                   (Windows: uses aac_mf via Media Foundation,\n"
         "                    falls back to software if unavailable)\n"
@@ -87,6 +95,29 @@ static void print_usage(const char *prog)
         "\n"
         "Open in browser: http://localhost:<port>/\n",
         prog);
+}
+
+static const char *video_mode_to_string(airplay_video_mode_t mode)
+{
+    switch (mode) {
+    case AIRPLAY_VIDEO_MODE_TRANSCODE_AUTO: return "transcode-auto";
+    case AIRPLAY_VIDEO_MODE_PASSTHROUGH:
+    default: return "passthrough";
+    }
+}
+
+static const char *video_encoder_pref_to_string(airplay_video_encoder_preference_t pref)
+{
+    switch (pref) {
+    case AIRPLAY_VIDEO_ENCODER_NVENC: return "nvenc";
+    case AIRPLAY_VIDEO_ENCODER_QSV: return "qsv";
+    case AIRPLAY_VIDEO_ENCODER_AMF: return "amf";
+    case AIRPLAY_VIDEO_ENCODER_VIDEOTOOLBOX: return "videotoolbox";
+    case AIRPLAY_VIDEO_ENCODER_LIBX264: return "libx264";
+    case AIRPLAY_VIDEO_ENCODER_SOFTWARE: return "software";
+    case AIRPLAY_VIDEO_ENCODER_AUTO:
+    default: return "auto";
+    }
 }
 
 static int parse_args(int argc, char **argv,
@@ -99,6 +130,8 @@ static int parse_args(int argc, char **argv,
     cfg->width       = 0;   /* device native */
     cfg->height      = 0;
     cfg->fps         = 60;
+    cfg->video_mode  = AIRPLAY_VIDEO_MODE_PASSTHROUGH;
+    cfg->video_encoder_preference = AIRPLAY_VIDEO_ENCODER_AUTO;
     cfg->hw_accel    = false;
 
     for (int i = 1; i < argc; i++) {
@@ -118,6 +151,36 @@ static int parse_args(int argc, char **argv,
             cfg->height = atoi(argv[++i]);
         } else if (strcmp(argv[i], "--fps") == 0 && i + 1 < argc) {
             cfg->fps = atoi(argv[++i]);
+        } else if (strcmp(argv[i], "--video-mode") == 0 && i + 1 < argc) {
+            const char *mode = argv[++i];
+            if (strcmp(mode, "passthrough") == 0) {
+                cfg->video_mode = AIRPLAY_VIDEO_MODE_PASSTHROUGH;
+            } else if (strcmp(mode, "transcode-auto") == 0) {
+                cfg->video_mode = AIRPLAY_VIDEO_MODE_TRANSCODE_AUTO;
+            } else {
+                fprintf(stderr, "Invalid --video-mode: %s\n", mode);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--video-encoder") == 0 && i + 1 < argc) {
+            const char *enc = argv[++i];
+            if (strcmp(enc, "auto") == 0) {
+                cfg->video_encoder_preference = AIRPLAY_VIDEO_ENCODER_AUTO;
+            } else if (strcmp(enc, "nvenc") == 0) {
+                cfg->video_encoder_preference = AIRPLAY_VIDEO_ENCODER_NVENC;
+            } else if (strcmp(enc, "qsv") == 0) {
+                cfg->video_encoder_preference = AIRPLAY_VIDEO_ENCODER_QSV;
+            } else if (strcmp(enc, "amf") == 0) {
+                cfg->video_encoder_preference = AIRPLAY_VIDEO_ENCODER_AMF;
+            } else if (strcmp(enc, "videotoolbox") == 0) {
+                cfg->video_encoder_preference = AIRPLAY_VIDEO_ENCODER_VIDEOTOOLBOX;
+            } else if (strcmp(enc, "libx264") == 0) {
+                cfg->video_encoder_preference = AIRPLAY_VIDEO_ENCODER_LIBX264;
+            } else if (strcmp(enc, "software") == 0) {
+                cfg->video_encoder_preference = AIRPLAY_VIDEO_ENCODER_SOFTWARE;
+            } else {
+                fprintf(stderr, "Invalid --video-encoder: %s\n", enc);
+                return 1;
+            }
         } else if (strcmp(argv[i], "--hw-accel") == 0) {
             cfg->hw_accel = true;
         } else {
@@ -155,11 +218,15 @@ int main(int argc, char **argv)
             "mediasoup port : %d\n"
             "Resolution     : %s\n"
             "FPS            : %d\n"
+            "Video mode     : %s\n"
+            "Video encoder  : %s\n"
             "HW accel       : %s\n\n",
             cfg.server_name,
             cfg.webrtc_port,
             res_str,
             cfg.fps,
+            video_mode_to_string(cfg.video_mode),
+            video_encoder_pref_to_string(cfg.video_encoder_preference),
             cfg.hw_accel ? "enabled (aac_mf)" : "disabled (software)");
 
     if (!airplay_stream_start(&cfg)) {
