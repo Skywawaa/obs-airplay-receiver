@@ -927,42 +927,63 @@ static void rtp_send_h264(struct webrtc_output *out,
 
 static bool opus_encoder_init(struct webrtc_output *out)
 {
-    /* Prefer built-in Opus first for maximum runtime compatibility.
-     * Some shared FFmpeg bundles expose libopus wrapper with extra deps. */
+    fprintf(stdout, "[WebRTC] avcodec version: %u.%u.%u\n",
+            LIBAVCODEC_VERSION_MAJOR,
+            LIBAVCODEC_VERSION_MINOR,
+            LIBAVCODEC_VERSION_MICRO);
+
     out->opus_codec = avcodec_find_encoder(AV_CODEC_ID_OPUS);
     if (!out->opus_codec)
         out->opus_codec = avcodec_find_encoder_by_name("libopus");
     if (!out->opus_codec) {
-        fprintf(stderr, "[WebRTC] No Opus encoder available\n");
+        fprintf(stderr, "[WebRTC] No Opus encoder found in this FFmpeg build\n");
         return false;
     }
+    fprintf(stdout, "[WebRTC] Opus codec found: %s\n", out->opus_codec->name);
 
     out->opus_ctx = avcodec_alloc_context3(out->opus_codec);
-    if (!out->opus_ctx) return false;
-
-    out->opus_ctx->sample_rate = OPUS_SAMPLE_RATE;
-    out->opus_ctx->sample_fmt  = AV_SAMPLE_FMT_FLT;
-    av_channel_layout_default(&out->opus_ctx->ch_layout, OPUS_CHANNELS);
-    out->opus_ctx->bit_rate   = 64000;
-    out->opus_ctx->frame_size = OPUS_FRAME_SIZE;
-
-    /* Some FFmpeg builds/codecs expose no writable priv_data options.
-     * Keep startup robust by only setting optional tuning when available. */
-    /* Optional encoder tuning can be build-dependent; keep startup robust. */
-
-    if (avcodec_open2(out->opus_ctx, out->opus_codec, NULL) < 0) {
-        fprintf(stderr, "[WebRTC] Failed to open Opus encoder\n");
-        avcodec_free_context(&out->opus_ctx);
+    if (!out->opus_ctx) {
+        fprintf(stderr, "[WebRTC] avcodec_alloc_context3 failed\n");
         return false;
     }
+
+    out->opus_ctx->sample_rate = OPUS_SAMPLE_RATE;
+    out->opus_ctx->bit_rate    = 64000;
+    av_channel_layout_default(&out->opus_ctx->ch_layout, OPUS_CHANNELS);
+
+    out->opus_ctx->sample_fmt = AV_SAMPLE_FMT_FLT;
+    if (out->opus_codec->sample_fmts) {
+        out->opus_ctx->sample_fmt = out->opus_codec->sample_fmts[0];
+        fprintf(stdout, "[WebRTC] Opus using sample_fmt=%d\n",
+                (int)out->opus_ctx->sample_fmt);
+    }
+
+    av_opt_set_int(out->opus_ctx->priv_data, "frame_duration", 20, 0);
+
+    fprintf(stdout, "[WebRTC] Opening Opus encoder...\n");
+    fflush(stdout);
+
+    int rc = avcodec_open2(out->opus_ctx, out->opus_codec, NULL);
+    if (rc < 0) {
+        char errbuf[128];
+        av_strerror(rc, errbuf, sizeof(errbuf));
+        fprintf(stderr, "[WebRTC] avcodec_open2 failed: %s (%d)\n", errbuf, rc);
+        avcodec_free_context(&out->opus_ctx);
+        out->opus_ctx = NULL;
+        return false;
+    }
+
+    int actual_frame_size = out->opus_ctx->frame_size;
+    fprintf(stdout, "[WebRTC] Opus encoder open OK, frame_size=%d\n",
+            actual_frame_size);
 
     out->opus_frame = av_frame_alloc();
     out->opus_pkt   = av_packet_alloc();
     if (!out->opus_frame || !out->opus_pkt) goto fail_enc;
 
-    out->opus_frame->nb_samples  = OPUS_FRAME_SIZE;
+    out->opus_frame->nb_samples  = actual_frame_size;
     out->opus_frame->sample_rate = OPUS_SAMPLE_RATE;
-    out->opus_frame->format      = AV_SAMPLE_FMT_FLT;
+    out->opus_frame->format      = out->opus_ctx->sample_fmt;
     av_channel_layout_copy(&out->opus_frame->ch_layout,
                            &out->opus_ctx->ch_layout);
     if (av_frame_get_buffer(out->opus_frame, 0) < 0) goto fail_enc;
