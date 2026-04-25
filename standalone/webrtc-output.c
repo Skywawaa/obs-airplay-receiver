@@ -958,8 +958,6 @@ static bool opus_encoder_init(struct webrtc_output *out)
                 (int)out->opus_ctx->sample_fmt);
     }
 
-    av_opt_set_int(out->opus_ctx->priv_data, "frame_duration", 20, 0);
-
     fprintf(stdout, "[WebRTC] Opening Opus encoder...\n");
     fflush(stdout);
 
