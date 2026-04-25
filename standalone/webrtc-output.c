@@ -134,6 +134,13 @@ static void thread_start(void (*fn)(void *), void *arg) {
 /* Max seconds to wait for mediasoup server before giving up retries */
 #define CONNECT_MAX_TRIES 120
 
+/*
+ * Maximum age for a cached IDR that can be safely re-injected for a new
+ * viewer. Older keyframes are likely from a different GOP and can freeze
+ * playback on that stale image.
+ */
+#define KEYFRAME_CACHE_MAX_AGE_US 500000
+
 /* ------------------------------------------------------------------ */
 /* State                                                                */
 /* ------------------------------------------------------------------ */
@@ -171,6 +178,7 @@ struct webrtc_output {
     /* Keyframe cache: last IDR frame (SPS+PPS+IDR, Annex-B) for reconnects */
     uint8_t *keyframe_cache;
     size_t   keyframe_cache_size;
+    int64_t  keyframe_cache_pts_us;
     bool     needs_keyframe;  /* inject cached KF before next P-frame */
 };
 
@@ -771,6 +779,7 @@ void webrtc_output_write_video(struct webrtc_output *out,
             free(out->keyframe_cache);
             out->keyframe_cache      = new_cache;
             out->keyframe_cache_size = size;
+            out->keyframe_cache_pts_us = pts_us;
             memcpy(out->keyframe_cache, data, size);
         } else {
             fprintf(stderr,
@@ -786,16 +795,20 @@ void webrtc_output_write_video(struct webrtc_output *out,
         if (is_idr)
             out->needs_keyframe = false;
 
-        /* Inject cached keyframe before the first non-IDR frame after a
-         * stream restart, so existing mediasoup consumers see video
-         * immediately without waiting for the next natural IDR. */
+        /* Inject a cached keyframe only if it is recent enough to belong to
+         * the active GOP. Re-injecting an old IDR can freeze playback on that
+         * stale frame after a browser reload. If the cache is stale, keep
+         * waiting for the next natural IDR from the source stream. */
         if (out->needs_keyframe && out->keyframe_cache &&
             out->keyframe_cache_size > 0) {
-            uint32_t kf_ts = (ts >= H264_FRAME_TICKS)
-                             ? ts - H264_FRAME_TICKS : 0;
-            rtp_send_h264(out, out->keyframe_cache, out->keyframe_cache_size,
-                          kf_ts);
-            out->needs_keyframe = false;
+            int64_t age_us = pts_us - out->keyframe_cache_pts_us;
+            if (age_us >= 0 && age_us <= KEYFRAME_CACHE_MAX_AGE_US) {
+                uint32_t kf_ts = (ts >= H264_FRAME_TICKS)
+                                 ? ts - H264_FRAME_TICKS : 0;
+                rtp_send_h264(out, out->keyframe_cache,
+                              out->keyframe_cache_size, kf_ts);
+                out->needs_keyframe = false;
+            }
         }
 
         rtp_send_h264(out, data, size, ts);
