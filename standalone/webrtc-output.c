@@ -561,11 +561,6 @@ static void transcode_process_video(struct webrtc_output *out,
  */
 static bool http_get_rtp_params(int port, int *video_port, int *audio_port)
 {
-#ifdef _WIN32
-    WSADATA wsa;
-    WSAStartup(MAKEWORD(2, 2), &wsa);
-#endif
-
     sock_t s = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == INVALID_SOCK) return false;
 
