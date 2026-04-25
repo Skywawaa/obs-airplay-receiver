@@ -37,10 +37,9 @@ static BOOL WINAPI ctrl_handler(DWORD type)
 }
 static LONG WINAPI unhandled_exception_filter(LPEXCEPTION_POINTERS info)
 {
-    (void)info;
-    fprintf(stderr, "[ERROR] Unhandled exception in background thread. This is likely a bug in the application.\n");
+    DWORD code = info ? info->ExceptionRecord->ExceptionCode : 0;
+    fprintf(stderr, "[ERROR] Unhandled exception: code=0x%08lx\n", code);
     fflush(stderr);
-    /* Exit gracefully instead of crashing */
     g_running = 0;
     return EXCEPTION_EXECUTE_HANDLER;
 }
