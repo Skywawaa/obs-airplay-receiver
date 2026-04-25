@@ -141,6 +141,12 @@ static void thread_start(void (*fn)(void *), void *arg) {
 /* One video frame offset at 60 fps in 90 kHz ticks (≈ 33 ms). */
 #define H264_FRAME_TICKS (H264_CLOCK_RATE / 60)
 
+/* New viewers may join between packets or miss the first reinjected IDR.
+ * Send a short bounded burst of cached IDRs after a viewer request so the
+ * decoder has a better chance to lock without a permanent periodic flash. */
+#define KEYFRAME_BURST_COUNT       3
+#define KEYFRAME_BURST_INTERVAL_US 200000
+
 /* Temporary stack buffer for one SWR resample call (per-channel samples) */
 #define RESAMPLE_TMP_CAP (OPUS_FRAME_SIZE * 4)
 
@@ -193,6 +199,8 @@ struct webrtc_output {
     size_t   keyframe_cache_size;
     int64_t  keyframe_cache_pts_us;
     bool     needs_keyframe;  /* inject cached KF before next P-frame */
+    int      pending_keyframe_burst;
+    int64_t  next_keyframe_burst_pts_us;
 
     uint64_t rtcp_keyframe_req_count;
     uint64_t injected_keyframe_count;
@@ -831,6 +839,8 @@ void webrtc_output_write_video(struct webrtc_output *out,
     if (out->ready && video_sock_poll_keyframe_feedback(out))
     {
         out->needs_keyframe = true;
+        out->pending_keyframe_burst = KEYFRAME_BURST_COUNT;
+        out->next_keyframe_burst_pts_us = 0;
         out->rtcp_keyframe_req_count++;
         fprintf(stdout,
                 "[WebRTC] RTCP keyframe feedback received (count=%llu)\n",
@@ -874,25 +884,36 @@ void webrtc_output_write_video(struct webrtc_output *out,
         uint32_t ts = (uint32_t)
             ((pts_us * (int64_t)H264_CLOCK_RATE) / 1000000LL);
 
-        if (is_idr)
+        if (is_idr) {
             out->needs_keyframe = false;
+            out->pending_keyframe_burst = 0;
+            out->next_keyframe_burst_pts_us = 0;
+        }
 
         /* Inject a cached keyframe when a new viewer arrives and needs sync.
-         * During normal playback (needs_keyframe=false), we let live frames flow
-         * through. At reconnect (needs_keyframe=true), inject the most recent
-         * cached IDR immediately so the viewer sees something right away. */
-        if (out->needs_keyframe && out->keyframe_cache &&
-            out->keyframe_cache_size > 0) {
+         * Use a short bounded burst to survive races or packet loss right after
+         * reconnect, but stop quickly to avoid repeatedly flashing old content. */
+        if ((out->needs_keyframe || out->pending_keyframe_burst > 0) &&
+            out->keyframe_cache && out->keyframe_cache_size > 0 &&
+            (out->next_keyframe_burst_pts_us == 0 ||
+             pts_us >= out->next_keyframe_burst_pts_us)) {
             uint32_t kf_ts = (ts >= H264_FRAME_TICKS)
                              ? ts - H264_FRAME_TICKS : 0;
             rtp_send_h264(out, out->keyframe_cache,
                           out->keyframe_cache_size, kf_ts);
             out->needs_keyframe = false;
+            if (out->pending_keyframe_burst > 0)
+                out->pending_keyframe_burst--;
+            out->next_keyframe_burst_pts_us =
+                (out->pending_keyframe_burst > 0)
+                ? pts_us + KEYFRAME_BURST_INTERVAL_US
+                : 0;
             out->injected_keyframe_count++;
             fprintf(stdout,
                     "[WebRTC] Injected cached IDR for new viewer "
-                    "(count=%llu)\n",
-                    (unsigned long long)out->injected_keyframe_count);
+                    "(count=%llu, burstRemaining=%d)\n",
+                    (unsigned long long)out->injected_keyframe_count,
+                    out->pending_keyframe_burst);
         }
 
         rtp_send_h264(out, data, size, ts);
@@ -904,8 +925,11 @@ void webrtc_output_request_keyframe(struct webrtc_output *out)
 {
     if (!out) return;
     mutex_lock(&out->lock);
-    if (out->ready)
+    if (out->ready) {
         out->needs_keyframe = true;
+        out->pending_keyframe_burst = KEYFRAME_BURST_COUNT;
+        out->next_keyframe_burst_pts_us = 0;
+    }
     mutex_unlock(&out->lock);
 }
 
