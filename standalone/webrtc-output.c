@@ -192,6 +192,7 @@ struct webrtc_output {
     AVCodecContext  *opus_ctx;
     AVFrame         *opus_frame;
     AVPacket        *opus_pkt;
+    bool            opus_disabled;
 
     /* SWR resampler: input rate → 48 kHz */
     struct SwrContext *swr;
@@ -888,9 +889,11 @@ static void rtp_send_h264(struct webrtc_output *out,
 
 static bool opus_encoder_init(struct webrtc_output *out)
 {
-    out->opus_codec = avcodec_find_encoder_by_name("libopus");
+    /* Prefer built-in Opus first for maximum runtime compatibility.
+     * Some shared FFmpeg bundles expose libopus wrapper with extra deps. */
+    out->opus_codec = avcodec_find_encoder(AV_CODEC_ID_OPUS);
     if (!out->opus_codec)
-        out->opus_codec = avcodec_find_encoder(AV_CODEC_ID_OPUS);
+        out->opus_codec = avcodec_find_encoder_by_name("libopus");
     if (!out->opus_codec) {
         fprintf(stderr, "[WebRTC] No Opus encoder available\n");
         return false;
@@ -907,9 +910,7 @@ static bool opus_encoder_init(struct webrtc_output *out)
 
     /* Some FFmpeg builds/codecs expose no writable priv_data options.
      * Keep startup robust by only setting optional tuning when available. */
-    if (out->opus_ctx->priv_data) {
-        av_opt_set(out->opus_ctx->priv_data, "application", "lowdelay", 0);
-    }
+    /* Optional encoder tuning can be build-dependent; keep startup robust. */
 
     if (avcodec_open2(out->opus_ctx, out->opus_codec, NULL) < 0) {
         fprintf(stderr, "[WebRTC] Failed to open Opus encoder\n");
@@ -1167,9 +1168,9 @@ struct webrtc_output *webrtc_output_create_with_options(
     mutex_init(&out->lock);
 
     if (!opus_encoder_init(out)) {
-        mutex_destroy(&out->lock);
-        free(out);
-        return NULL;
+        out->opus_disabled = true;
+        fprintf(stderr,
+                "[WebRTC] Warning: Opus init failed at startup, continuing without audio\n");
     }
 
     /* Start background thread to connect to mediasoup */
@@ -1363,7 +1364,20 @@ void webrtc_output_write_audio(struct webrtc_output *out,
 
     if (!out || !pcm || samples <= 0) return;
 
+    if (out->opus_disabled)
+        return;
+
     mutex_lock(&out->lock);
+
+    if (!out->opus_ctx || !out->opus_frame || !out->opus_pkt) {
+        if (!opus_encoder_init(out)) {
+            out->opus_disabled = true;
+            fprintf(stderr,
+                    "[WebRTC] Warning: disabling audio (Opus init failed)\n");
+            mutex_unlock(&out->lock);
+            return;
+        }
+    }
 
     if (!out->ready || out->audio_sock == INVALID_SOCK) {
         mutex_unlock(&out->lock);
