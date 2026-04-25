@@ -57,7 +57,10 @@ static void mutex_unlock(wrtc_mutex_t *m)  { LeaveCriticalSection(m); }
 static void mutex_destroy(wrtc_mutex_t *m) { DeleteCriticalSection(m); }
 
 static void thread_start(void (*fn)(void *), void *arg) {
-    _beginthread((_beginthread_proc_type)fn, 0, arg);
+    uintptr_t rc = _beginthread((_beginthread_proc_type)fn, 0, arg);
+    if (rc == (uintptr_t)(-1L)) {
+        fprintf(stderr, "[ERROR] _beginthread failed: unable to start thread\n");
+    }
 }
 
 #  define SLEEP_MS(ms) Sleep(ms)
@@ -1040,6 +1043,7 @@ static void connect_thread(void *arg)
     fprintf(stdout,
             "[WebRTC] Waiting for mediasoup server on port %d …\n",
             out->mediasoup_port);
+    fflush(stdout);
 
     for (int tries = 0; out->running; tries++) {
         if (tries > 0) SLEEP_MS(1000);
@@ -1048,6 +1052,7 @@ static void connect_thread(void *arg)
                     "[WebRTC] mediasoup server not reachable after %d seconds"
                     " — still retrying\n",
                     tries);
+            fflush(stderr);
             /* Reset counter to keep retrying indefinitely */
             tries = 0;
         }
@@ -1102,6 +1107,7 @@ static void connect_thread(void *arg)
                 "[WebRTC] Connected to mediasoup — video UDP port %d,"
                 " audio UDP port %d\n",
                 vport, aport);
+        fflush(stdout);
         break; /* proceed to keyframe poll loop */
     }
 
@@ -1171,10 +1177,12 @@ struct webrtc_output *webrtc_output_create_with_options(
         out->opus_disabled = true;
         fprintf(stderr,
                 "[WebRTC] Warning: Opus init failed at startup, continuing without audio\n");
+        fflush(stderr);
     }
 
     /* Start background thread to connect to mediasoup */
     thread_start(connect_thread, out);
+    fflush(stdout);
 
     return out;
 }

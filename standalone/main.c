@@ -27,6 +27,7 @@
 #    define WIN32_LEAN_AND_MEAN
 #  endif
 #  include <windows.h>
+#  include <debugapi.h>
 static volatile int g_running = 1;
 static BOOL WINAPI ctrl_handler(DWORD type)
 {
@@ -34,9 +35,19 @@ static BOOL WINAPI ctrl_handler(DWORD type)
     g_running = 0;
     return TRUE;
 }
+static LONG WINAPI unhandled_exception_filter(LPEXCEPTION_POINTERS info)
+{
+    (void)info;
+    fprintf(stderr, "[ERROR] Unhandled exception in background thread. This is likely a bug in the application.\n");
+    fflush(stderr);
+    /* Exit gracefully instead of crashing */
+    g_running = 0;
+    return EXCEPTION_EXECUTE_HANDLER;
+}
 static void setup_signal(void)
 {
     SetConsoleCtrlHandler(ctrl_handler, TRUE);
+    SetUnhandledExceptionFilter(unhandled_exception_filter);
 }
 static void wait_for_exit(void)
 {
